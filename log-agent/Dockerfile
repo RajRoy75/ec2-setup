@@ -1,9 +1,8 @@
 FROM golang:1.24.0-alpine AS builder
 
 WORKDIR /app
-COPY go.mod ./
-RUN go mod download
-COPY main.go ./
+COPY go.mod main.go ./
+RUN go mod tidy
 RUN go build -o log-agent .
 
 FROM alpine:latest
