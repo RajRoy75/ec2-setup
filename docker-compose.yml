@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: node-exporter
+    restart: unless-stopped
+    ports:
+      - "9100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+
+  log-agent:
+    build: ./log-agent
+    container_name: log-agent
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    volumes:
+      # Mount the Docker socket so the log-agent can read Docker container logs
+      - /var/run/docker.sock:/var/run/docker.sock:ro
