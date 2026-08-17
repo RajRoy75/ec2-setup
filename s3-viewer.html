@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>S3 Parquet Logs Viewer</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <title>S3 Parquet Logs Archive Viewer</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
         :root {
             --bg-gradient: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
@@ -40,7 +40,7 @@
             background: linear-gradient(to right, #60a5fa, #a78bfa);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
-            margin-bottom: 0.5rem;
+            margin-bottom: 0.4rem;
         }
 
         .header p {
@@ -59,18 +59,18 @@
         }
 
         .card-title {
-            font-size: 1.15rem;
+            font-size: 1.1rem;
             font-weight: 600;
-            margin-bottom: 1rem;
+            margin-bottom: 1.2rem;
             display: flex;
             align-items: center;
-            gap: 0.5rem;
+            justify-content: space-between;
         }
 
         .form-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 1rem;
+            gap: 1.2rem;
             align-items: flex-end;
         }
 
@@ -81,15 +81,15 @@
         }
 
         .form-group label {
-            font-size: 0.8rem;
+            font-size: 0.78rem;
             color: var(--text-muted);
-            font-weight: 500;
+            font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 0.05em;
         }
 
         input, select {
-            background: rgba(15, 23, 42, 0.8);
+            background: rgba(15, 23, 42, 0.85);
             border: 1px solid #334155;
             color: var(--text-main);
             padding: 0.65rem 0.9rem;
@@ -97,18 +97,24 @@
             font-size: 0.9rem;
             font-family: inherit;
             outline: none;
-            transition: border-color 0.2s;
+            transition: all 0.2s;
+            width: 100%;
         }
 
         input:focus, select:focus {
             border-color: var(--primary);
-            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25);
+        }
+
+        select option {
+            background: #1e293b;
+            color: var(--text-main);
         }
 
         button {
             background: var(--primary);
             color: white;
-            padding: 0.7rem 1.2rem;
+            padding: 0.65rem 1.2rem;
             border: none;
             border-radius: 8px;
             font-weight: 600;
@@ -131,6 +137,26 @@
         }
         .btn-secondary:hover { background: rgba(59, 130, 246, 0.3); }
 
+        .btn-quick {
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-muted);
+            border: 1px solid #334155;
+            padding: 0.2rem 0.6rem;
+            font-size: 0.75rem;
+            border-radius: 6px;
+        }
+        .btn-quick:hover { color: var(--text-main); border-color: var(--primary); }
+
+        .status-badge {
+            font-size: 0.75rem;
+            font-weight: 600;
+            padding: 0.2rem 0.6rem;
+            border-radius: 9999px;
+            text-transform: uppercase;
+        }
+        .status-online { background: rgba(16, 185, 129, 0.2); color: var(--success); border: 1px solid var(--success); }
+        .status-offline { background: rgba(239, 68, 68, 0.2); color: var(--danger); border: 1px solid var(--danger); }
+
         .files-table {
             width: 100%;
             border-collapse: collapse;
@@ -149,7 +175,7 @@
             font-size: 0.75rem;
             text-transform: uppercase;
             font-weight: 600;
-            background: rgba(0,0,0,0.2);
+            background: rgba(0,0,0,0.25);
         }
 
         .files-table tr:hover td {
@@ -160,6 +186,7 @@
             font-family: 'JetBrains Mono', monospace;
             font-size: 0.85rem;
             color: #60a5fa;
+            font-weight: 500;
         }
 
         /* Log Viewer Section */
@@ -208,7 +235,7 @@
         .log-row {
             display: flex;
             gap: 0.8rem;
-            padding: 0.25rem 0.4rem;
+            padding: 0.3rem 0.5rem;
             border-radius: 4px;
             line-height: 1.4;
             word-break: break-word;
@@ -228,7 +255,7 @@
         .badge-stream {
             font-size: 0.68rem;
             font-weight: 700;
-            padding: 0.1rem 0.4rem;
+            padding: 0.1rem 0.45rem;
             border-radius: 4px;
             text-transform: uppercase;
             height: fit-content;
@@ -255,7 +282,8 @@
         .status-msg {
             text-align: center;
             color: var(--text-muted);
-            padding: 2rem;
+            padding: 2.5rem;
+            font-size: 0.95rem;
         }
     </style>
 </head>
@@ -263,31 +291,46 @@
 
     <div class="header">
         <h1>📦 S3 Parquet Logs Archive Viewer</h1>
-        <p>Explore, query, and inspect historical container logs archived in S3</p>
+        <p>Explore, query, and inspect container logs stored in Parquet format in S3</p>
     </div>
 
     <!-- Filters & Query Card -->
     <div class="card">
-        <div class="card-title">🔍 Query S3 Parquet Archive</div>
+        <div class="card-title">
+            <span>🔍 Query S3 Parquet Archive</span>
+            <div style="display: flex; align-items: center; gap: 0.6rem;">
+                <span id="server-status" class="status-badge status-offline">Connecting...</span>
+                <button class="btn-quick" onclick="autoDetectServer()" title="Refresh server details">🔄 Refresh</button>
+            </div>
+        </div>
+
         <div class="form-grid">
             <div class="form-group">
                 <label>Log-Agent Server URL</label>
-                <input type="text" id="agent-url" value="http://localhost:8081" placeholder="http://localhost:8081 or EC2 IP">
+                <input type="text" id="agent-url" value="http://localhost:8081" placeholder="http://localhost:8081" onchange="autoDetectServer()">
             </div>
 
             <div class="form-group">
-                <label>Container Name</label>
-                <input type="text" id="container-name" placeholder="e.g. nginx, backend, or leave empty">
+                <label>Container</label>
+                <select id="container-select" onchange="fetchFiles()">
+                    <option value="">(All Containers)</option>
+                </select>
             </div>
 
             <div class="form-group">
-                <label>Date</label>
-                <input type="date" id="log-date">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <label>Date</label>
+                    <div style="display: flex; gap: 0.3rem;">
+                        <button type="button" class="btn-quick" onclick="setQuickDate(0)">Today</button>
+                        <button type="button" class="btn-quick" onclick="setQuickDate(-1)">Yesterday</button>
+                    </div>
+                </div>
+                <input type="date" id="log-date" onchange="fetchFiles()">
             </div>
 
             <div class="form-group">
-                <label>Instance ID (Optional)</label>
-                <input type="text" id="instance-id" placeholder="leave blank for current instance">
+                <label>Detected Server Instance ID</label>
+                <input type="text" id="instance-id" placeholder="auto-detected..." readonly style="opacity: 0.85; cursor: default;">
             </div>
 
             <div>
@@ -300,7 +343,7 @@
 
     <!-- Files List Card -->
     <div class="card" id="files-card" style="display: none;">
-        <div class="card-title" style="justify-content: space-between;">
+        <div class="card-title">
             <span>📁 Available Parquet Files (<span id="files-count">0</span>)</span>
         </div>
         <div id="files-container"></div>
@@ -310,7 +353,7 @@
     <div class="card" id="log-viewer-section">
         <div class="viewer-toolbar">
             <div style="display: flex; align-items: center; gap: 0.8rem;">
-                <h3 style="font-size: 1.1rem;" id="active-file-title">File Details</h3>
+                <h3 style="font-size: 1.05rem;" id="active-file-title">File Details</h3>
                 <span class="badge-count" id="active-rows-count">0 rows</span>
             </div>
             <div style="display: flex; gap: 0.6rem; align-items: center;">
@@ -331,9 +374,61 @@
 
         let currentRecords = [];
 
+        function setQuickDate(offsetDays) {
+            const d = new Date();
+            d.setDate(d.getDate() + offsetDays);
+            document.getElementById('log-date').value = d.toISOString().split('T')[0];
+            fetchFiles();
+        }
+
+        // Auto-detect server status, instance ID, and running containers on page load
+        async function autoDetectServer() {
+            const agentUrl = document.getElementById('agent-url').value.replace(/\/+$/, "");
+            const statusBadge = document.getElementById('server-status');
+            const instanceInput = document.getElementById('instance-id');
+            const containerSelect = document.getElementById('container-select');
+
+            statusBadge.className = "status-badge status-offline";
+            statusBadge.textContent = "Connecting...";
+
+            try {
+                // 1. Fetch /health
+                const healthRes = await fetch(`${agentUrl}/health`);
+                if (healthRes.ok) {
+                    const health = await healthRes.json();
+                    statusBadge.className = "status-badge status-online";
+                    statusBadge.textContent = "ONLINE";
+                    instanceInput.value = health.instance_id || "unknown";
+                } else {
+                    throw new Error("Health check failed");
+                }
+
+                // 2. Fetch /containers to populate dropdown
+                const contRes = await fetch(`${agentUrl}/containers`);
+                if (contRes.ok) {
+                    const containers = await contRes.json() || [];
+                    const currentVal = containerSelect.value;
+                    containerSelect.innerHTML = `<option value="">(All Containers)</option>`;
+                    containers.forEach(name => {
+                        const opt = document.createElement("option");
+                        opt.value = name;
+                        opt.textContent = `🐳 ${name}`;
+                        if (name === currentVal) opt.selected = true;
+                        containerSelect.appendChild(opt);
+                    });
+                }
+
+                // Auto-fetch files for today
+                fetchFiles();
+            } catch (err) {
+                statusBadge.className = "status-badge status-offline";
+                statusBadge.textContent = "OFFLINE / UNREACHABLE";
+            }
+        }
+
         async function fetchFiles() {
             const agentUrl = document.getElementById('agent-url').value.replace(/\/+$/, "");
-            const containerName = document.getElementById('container-name').value.trim();
+            const containerName = document.getElementById('container-select').value;
             const date = document.getElementById('log-date').value;
             const instanceId = document.getElementById('instance-id').value.trim();
 
@@ -353,13 +448,13 @@
                 if (instanceId) url += `instance_id=${encodeURIComponent(instanceId)}&`;
 
                 const res = await fetch(url);
-                if (!res.ok) throw new Error(await res.text() || "Failed to fetch files");
+                if (!res.ok) throw new Error(await res.text() || "Failed to fetch files from S3");
 
                 const files = await res.json() || [];
                 document.getElementById('files-count').textContent = files.length;
 
                 if (files.length === 0) {
-                    filesContainer.innerHTML = "<div class='status-msg'>No Parquet log files found matching the criteria in S3.</div>";
+                    filesContainer.innerHTML = "<div class='status-msg'>No Parquet log files found matching the criteria in S3 for this date.</div>";
                     return;
                 }
 
@@ -370,7 +465,7 @@
                                 <th>File Name</th>
                                 <th>S3 Key Path</th>
                                 <th>Size</th>
-                                <th>Last Modified</th>
+                                <th>Last Uploaded</th>
                                 <th>Action</th>
                             </tr>
                         </thead>
@@ -382,7 +477,7 @@
                         ? (f.size_bytes / (1024 * 1024)).toFixed(2) + " MB"
                         : (f.size_bytes / 1024).toFixed(1) + " KB";
 
-                    const dateFormatted = new Date(f.last_modified).toLocaleString();
+                    const dateFormatted = f.last_modified ? new Date(f.last_modified).toLocaleString() : 'N/A';
 
                     html += `
                         <tr>
@@ -434,6 +529,29 @@
             }
         }
 
+        // Robust timestamp formatting helper (supports microseconds, milliseconds, seconds, ISO strings)
+        function formatTimestamp(ts) {
+            if (!ts && ts !== 0) return "N/A";
+            try {
+                let d;
+                if (typeof ts === 'number') {
+                    // If microseconds (> 1e14), convert to ms
+                    if (ts > 1e14) d = new Date(Math.floor(ts / 1000));
+                    // If milliseconds (> 1e11)
+                    else if (ts > 1e11) d = new Date(ts);
+                    // If seconds
+                    else d = new Date(ts * 1000);
+                } else {
+                    d = new Date(ts);
+                }
+
+                if (isNaN(d.getTime())) return String(ts);
+                return d.toISOString().replace('T', ' ').replace('Z', ' UTC');
+            } catch (e) {
+                return String(ts);
+            }
+        }
+
         function renderLogs(records) {
             const windowEl = document.getElementById('logs-window');
             if (!records || records.length === 0) {
@@ -443,13 +561,18 @@
 
             let html = "";
             records.forEach(r => {
-                const date = new Date(r.timestamp / 1000).toISOString();
-                const streamClass = r.stream === 'stderr' ? 'badge-stderr' : 'badge-stdout';
+                const tsRaw = r.timestamp !== undefined ? r.timestamp : r.Timestamp;
+                const streamRaw = r.stream || r.Stream || 'stdout';
+                const msgRaw = r.message !== undefined ? r.message : (r.Message !== undefined ? r.Message : '');
+
+                const formattedTime = formatTimestamp(tsRaw);
+                const streamClass = String(streamRaw).toLowerCase() === 'stderr' ? 'badge-stderr' : 'badge-stdout';
+
                 html += `
                     <div class="log-row">
-                        <span class="log-ts">${date}</span>
-                        <span class="badge-stream ${streamClass}">${r.stream || 'stdout'}</span>
-                        <span class="log-msg">${escapeHtml(r.message)}</span>
+                        <span class="log-ts">${formattedTime}</span>
+                        <span class="badge-stream ${streamClass}">${escapeHtml(streamRaw)}</span>
+                        <span class="log-msg">${escapeHtml(msgRaw)}</span>
                     </div>
                 `;
             });
@@ -464,10 +587,11 @@
                 return;
             }
 
-            const filtered = currentRecords.filter(r => 
-                (r.message && r.message.toLowerCase().includes(q)) ||
-                (r.stream && r.stream.toLowerCase().includes(q))
-            );
+            const filtered = currentRecords.filter(r => {
+                const msg = String(r.message !== undefined ? r.message : (r.Message || '')).toLowerCase();
+                const stream = String(r.stream || r.Stream || '').toLowerCase();
+                return msg.includes(q) || stream.includes(q);
+            });
             renderLogs(filtered);
         }
 
@@ -488,13 +612,16 @@
 
         function escapeHtml(str) {
             if (!str) return '';
-            return str
+            return String(str)
                 .replace(/&/g, "&amp;")
                 .replace(/</g, "&lt;")
                 .replace(/>/g, "&gt;")
                 .replace(/"/g, "&quot;")
                 .replace(/'/g, "&#039;");
         }
+
+        // Initialize on page load
+        autoDetectServer();
     </script>
 </body>
 </html>

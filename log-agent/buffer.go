@@ -4,13 +4,13 @@ import (
 	"sync"
 )
 
-// LogRecord represents a single row in the Parquet schema
+// LogRecord represents a single row in the Parquet and JSON schema
 type LogRecord struct {
-	Timestamp     int64  `parquet:"timestamp"`
-	InstanceID    string `parquet:"instance_id"`
-	ContainerName string `parquet:"container_name"`
-	Stream        string `parquet:"stream"`
-	Message       string `parquet:"message"`
+	Timestamp     int64  `parquet:"timestamp" json:"timestamp"`
+	InstanceID    string `parquet:"instance_id" json:"instance_id"`
+	ContainerName string `parquet:"container_name" json:"container_name"`
+	Stream        string `parquet:"stream" json:"stream"`
+	Message       string `parquet:"message" json:"message"`
 }
 
 // ContainerBuffer stores records for one specific container
