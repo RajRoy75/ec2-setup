@@ -5,10 +5,14 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"strconv"
+	"syscall"
+	"time"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
-	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/gorilla/websocket"
 )
 
@@ -16,24 +20,71 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
-// wsWriter wraps a WebSocket connection to implement io.Writer
-type wsWriter struct {
-	conn *websocket.Conn
-}
-
-func (w *wsWriter) Write(p []byte) (n int, err error) {
-	err = w.conn.WriteMessage(websocket.TextMessage, p)
-	return len(p), err
+func getEnv(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
 }
 
 func main() {
-	// Connect to the local Docker socket
+	// Configuration from Environment Variables
+	s3Bucket := os.Getenv("S3_BUCKET")
+	if s3Bucket == "" {
+		log.Fatal("FATAL: Environment variable S3_BUCKET must be set")
+	}
+	s3Prefix := getEnv("S3_PREFIX", "logs/")
+	awsRegion := os.Getenv("AWS_REGION")
+	flushIntervalStr := getEnv("FLUSH_INTERVAL", "5m")
+	flushBatchSizeStr := getEnv("FLUSH_BATCH_SIZE", "10000")
+	port := getEnv("PORT", "8081")
+
+	flushInterval, err := time.ParseDuration(flushIntervalStr)
+	if err != nil {
+		log.Fatalf("Invalid FLUSH_INTERVAL: %v", err)
+	}
+
+	flushBatchSize, err := strconv.Atoi(flushBatchSizeStr)
+	if err != nil {
+		log.Fatalf("Invalid FLUSH_BATCH_SIZE: %v", err)
+	}
+
+	// 1. Identify Instance / Server
+	instanceID := GetInstanceID()
+	log.Printf("Starting log-agent on instance: %s | S3 Bucket: %s | Flush Interval: %v", instanceID, s3Bucket, flushInterval)
+
+	// 2. Connect to Docker
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
 		log.Fatalf("Failed to connect to docker daemon: %v", err)
 	}
 
-	// 1. GET /containers -> returns JSON array of container names
+	// 3. Initialize AWS S3 Uploader
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	uploader, err := NewS3Uploader(ctx, s3Bucket, s3Prefix, awsRegion, instanceID)
+	if err != nil {
+		log.Fatalf("Failed to initialize S3 uploader: %v", err)
+	}
+
+	// 4. Initialize Buffer & Flusher
+	var flusher *Flusher
+	bufMgr := NewBufferManager(flushBatchSize, func(containerName string) {
+		if flusher != nil {
+			go flusher.FlushContainer(containerName)
+		}
+	})
+
+	flusher = NewFlusher(bufMgr, uploader, flushInterval)
+	flusher.Start()
+
+	// 5. Initialize Live WebSocket Hub & Background Collector
+	hub := NewHub()
+	go WatchContainers(ctx, cli, instanceID, bufMgr, hub)
+
+	// 6. HTTP Endpoints
+	// GET /containers
 	http.HandleFunc("/containers", func(w http.ResponseWriter, r *http.Request) {
 		containers, err := cli.ContainerList(context.Background(), container.ListOptions{})
 		if err != nil {
@@ -44,15 +95,15 @@ func main() {
 		var names []string
 		for _, c := range containers {
 			if len(c.Names) > 0 {
-				names = append(names, c.Names[0][1:]) // Strip leading slash
+				names = append(names, c.Names[0][1:])
 			}
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(names)
+		_ = json.NewEncoder(w).Encode(names)
 	})
 
-	// 2. WS /logs?container=<name> -> stream logs
+	// WS /logs?container=<name>
 	http.HandleFunc("/logs", func(w http.ResponseWriter, r *http.Request) {
 		containerName := r.URL.Query().Get("container")
 		if containerName == "" {
@@ -67,31 +118,65 @@ func main() {
 		}
 		defer conn.Close()
 
-		options := container.LogsOptions{
-			ShowStdout: true,
-			ShowStderr: true,
-			Follow:     true,
-			Tail:       "100",
-		}
+		hub.Register(containerName, conn)
+		defer hub.Unregister(containerName, conn)
 
-		out, err := cli.ContainerLogs(context.Background(), containerName, options)
-		if err != nil {
-			conn.WriteMessage(websocket.TextMessage, []byte("Error attaching to logs: "+err.Error()))
-			return
-		}
-		defer out.Close()
-
-		// Docker sends multiplexed logs (stdout/stderr have 8-byte headers).
-		// stdcopy.StdCopy strips the headers and routes the raw text.
-		writer := &wsWriter{conn: conn}
-		_, err = stdcopy.StdCopy(writer, writer, out)
-		if err != nil {
-			log.Printf("Error streaming logs for %s: %v", containerName, err)
+		// Keep connection open until client disconnects
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				break
+			}
 		}
 	})
 
-	log.Println("log-agent listening on :8081")
-	if err := http.ListenAndServe(":8081", nil); err != nil {
-		log.Fatalf("Server failed: %v", err)
-	}
+	// GET /health
+	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		stats := map[string]interface{}{
+			"status":      "healthy",
+			"instance_id": instanceID,
+			"buffers":     bufMgr.Stats(),
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(stats)
+	})
+
+	// POST /flush -> manually trigger flush on demand
+	http.HandleFunc("/flush", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		go flusher.FlushAll()
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"status":"flush triggered"}`))
+	})
+
+	server := &http.Server{Addr: ":" + port}
+
+	// 7. Graceful Shutdown Listener
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		log.Printf("log-agent HTTP listening on :%s", port)
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Server error: %v", err)
+		}
+	}()
+
+	<-sigCh
+	log.Println("Received shutdown signal. Stopping services...")
+
+	// Cancel background Docker tailing
+	cancel()
+
+	// Shutdown HTTP Server
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+	_ = server.Shutdown(shutdownCtx)
+
+	// Flush all remaining records to S3
+	flusher.Stop()
+
+	log.Println("log-agent stopped cleanly.")
 }

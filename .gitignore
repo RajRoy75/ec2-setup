@@ -1,0 +1,4 @@
+.env
+log-agent/log-agent
+*.parquet
+.DS_Store
