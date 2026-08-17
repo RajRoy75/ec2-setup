@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
@@ -40,6 +42,20 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func enableCORS(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		next(w, r)
+	}
 }
 
 func main() {
@@ -99,7 +115,7 @@ func main() {
 
 	// 6. HTTP Endpoints
 	// GET /containers
-	http.HandleFunc("/containers", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/containers", enableCORS(func(w http.ResponseWriter, r *http.Request) {
 		containers, err := cli.ContainerList(context.Background(), container.ListOptions{})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -115,7 +131,7 @@ func main() {
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(names)
-	})
+	}))
 
 	// WS /logs?container=<name>&tail=<n>
 	http.HandleFunc("/logs", func(w http.ResponseWriter, r *http.Request) {
@@ -176,7 +192,7 @@ func main() {
 	})
 
 	// GET /health
-	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/health", enableCORS(func(w http.ResponseWriter, r *http.Request) {
 		stats := map[string]interface{}{
 			"status":      "healthy",
 			"instance_id": instanceID,
@@ -184,10 +200,10 @@ func main() {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(stats)
-	})
+	}))
 
 	// POST /flush -> manually trigger flush on demand
-	http.HandleFunc("/flush", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/flush", enableCORS(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -195,7 +211,43 @@ func main() {
 		go flusher.FlushAll()
 		w.WriteHeader(http.StatusAccepted)
 		_, _ = w.Write([]byte(`{"status":"flush triggered"}`))
-	})
+	}))
+
+	// ── S3 Parquet Archive Query Endpoints ──
+
+	// GET /api/archive/files?instance_id=<id>&container=<name>&date=<YYYY-MM-DD>
+	http.HandleFunc("/api/archive/files", enableCORS(func(w http.ResponseWriter, r *http.Request) {
+		instID := r.URL.Query().Get("instance_id")
+		contName := r.URL.Query().Get("container")
+		date := r.URL.Query().Get("date")
+
+		files, err := uploader.ListFiles(r.Context(), instID, contName, date)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to list S3 files: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(files)
+	}))
+
+	// GET /api/archive/read?key=<s3_key>
+	http.HandleFunc("/api/archive/read", enableCORS(func(w http.ResponseWriter, r *http.Request) {
+		key := r.URL.Query().Get("key")
+		if key == "" {
+			http.Error(w, "missing 'key' query parameter", http.StatusBadRequest)
+			return
+		}
+
+		records, err := uploader.ReadParquetFile(r.Context(), key)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to read Parquet file: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(records)
+	}))
 
 	server := &http.Server{Addr: ":" + port}
 

@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -13,7 +15,15 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/parquet-go/parquet-go"
 )
+
+type S3FileInfo struct {
+	Key          string    `json:"key"`
+	FileName     string    `json:"file_name"`
+	Size         int64     `json:"size_bytes"`
+	LastModified time.Time `json:"last_modified"`
+}
 
 type S3Uploader struct {
 	client     *s3.Client
@@ -91,4 +101,71 @@ func (u *S3Uploader) UploadParquet(ctx context.Context, containerName string, da
 
 	log.Printf("[S3] Successfully uploaded %d bytes to s3://%s/%s", len(data), u.bucket, key)
 	return nil
+}
+
+// ListFiles lists all Parquet log files in S3 matching the given filters
+func (u *S3Uploader) ListFiles(ctx context.Context, instanceID, containerName, date string) ([]S3FileInfo, error) {
+	if instanceID == "" {
+		instanceID = u.instanceID
+	}
+
+	prefix := fmt.Sprintf("%sinstance_id=%s/", u.prefix, instanceID)
+	if containerName != "" {
+		prefix += fmt.Sprintf("container=%s/", containerName)
+		if date != "" {
+			prefix += fmt.Sprintf("date=%s/", date)
+		}
+	}
+
+	output, err := u.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+		Bucket: aws.String(u.bucket),
+		Prefix: aws.String(prefix),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list objects in s3: %w", err)
+	}
+
+	var files []S3FileInfo
+	for _, obj := range output.Contents {
+		if strings.HasSuffix(*obj.Key, ".parquet") {
+			parts := strings.Split(*obj.Key, "/")
+			fileName := parts[len(parts)-1]
+			files = append(files, S3FileInfo{
+				Key:          *obj.Key,
+				FileName:     fileName,
+				Size:         *obj.Size,
+				LastModified: *obj.LastModified,
+			})
+		}
+	}
+
+	return files, nil
+}
+
+// ReadParquetFile downloads and parses a Parquet file from S3 into []LogRecord
+func (u *S3Uploader) ReadParquetFile(ctx context.Context, key string) ([]LogRecord, error) {
+	resp, err := u.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(u.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get s3 object: %w", err)
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read s3 body: %w", err)
+	}
+
+	reader := parquet.NewGenericReader[LogRecord](bytes.NewReader(data))
+	defer reader.Close()
+
+	records := make([]LogRecord, reader.NumRows())
+	n, err := reader.Read(records)
+	if err != nil && err != io.EOF {
+		return nil, fmt.Errorf("failed to decode parquet records: %w", err)
+	}
+
+	return records[:n], nil
 }
