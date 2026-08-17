@@ -8,16 +8,31 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
+	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/gorilla/websocket"
 )
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
+}
+
+// wsWriter wraps a WebSocket connection to implement io.Writer with a mutex
+type wsWriter struct {
+	mu   sync.Mutex
+	conn *websocket.Conn
+}
+
+func (w *wsWriter) Write(p []byte) (n int, err error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	err = w.conn.WriteMessage(websocket.TextMessage, p)
+	return len(p), err
 }
 
 func getEnv(key, fallback string) string {
@@ -79,9 +94,8 @@ func main() {
 	flusher = NewFlusher(bufMgr, uploader, flushInterval)
 	flusher.Start()
 
-	// 5. Initialize Live WebSocket Hub & Background Collector
-	hub := NewHub()
-	go WatchContainers(ctx, cli, instanceID, bufMgr, hub)
+	// 5. Start 24/7 background Docker log collector for S3
+	go WatchContainers(ctx, cli, instanceID, bufMgr)
 
 	// 6. HTTP Endpoints
 	// GET /containers
@@ -103,12 +117,21 @@ func main() {
 		_ = json.NewEncoder(w).Encode(names)
 	})
 
-	// WS /logs?container=<name>
+	// WS /logs?container=<name>&tail=<n>
 	http.HandleFunc("/logs", func(w http.ResponseWriter, r *http.Request) {
 		containerName := r.URL.Query().Get("container")
 		if containerName == "" {
 			http.Error(w, "missing container parameter", http.StatusBadRequest)
 			return
+		}
+
+		// Support ?tail=0 or ?tail=all for full history (used by test.html "Load Full History")
+		tailParam := r.URL.Query().Get("tail")
+		tailSetting := "100"
+		if tailParam == "0" || tailParam == "all" {
+			tailSetting = "all"
+		} else if tailParam != "" {
+			tailSetting = tailParam
 		}
 
 		conn, err := upgrader.Upgrade(w, r, nil)
@@ -118,14 +141,37 @@ func main() {
 		}
 		defer conn.Close()
 
-		hub.Register(containerName, conn)
-		defer hub.Unregister(containerName, conn)
+		logCtx, logCancel := context.WithCancel(context.Background())
+		defer logCancel()
 
-		// Keep connection open until client disconnects
-		for {
-			if _, _, err := conn.ReadMessage(); err != nil {
-				break
+		// Read pump to detect client disconnection
+		go func() {
+			for {
+				if _, _, err := conn.ReadMessage(); err != nil {
+					logCancel()
+					return
+				}
 			}
+		}()
+
+		options := container.LogsOptions{
+			ShowStdout: true,
+			ShowStderr: true,
+			Follow:     true,
+			Tail:       tailSetting,
+		}
+
+		out, err := cli.ContainerLogs(logCtx, containerName, options)
+		if err != nil {
+			_ = conn.WriteMessage(websocket.TextMessage, []byte("Error attaching to logs: "+err.Error()))
+			return
+		}
+		defer out.Close()
+
+		writer := &wsWriter{conn: conn}
+		_, err = stdcopy.StdCopy(writer, writer, out)
+		if err != nil && logCtx.Err() == nil {
+			log.Printf("Streaming ended for %s: %v", containerName, err)
 		}
 	})
 

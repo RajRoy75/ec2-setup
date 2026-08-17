@@ -12,60 +12,17 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
-	"github.com/gorilla/websocket"
 )
 
-type Hub struct {
-	mu      sync.Mutex
-	clients map[string]map[*websocket.Conn]bool
-}
-
-func NewHub() *Hub {
-	return &Hub{
-		clients: make(map[string]map[*websocket.Conn]bool),
-	}
-}
-
-func (h *Hub) Register(containerName string, conn *websocket.Conn) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if _, exists := h.clients[containerName]; !exists {
-		h.clients[containerName] = make(map[*websocket.Conn]bool)
-	}
-	h.clients[containerName][conn] = true
-}
-
-func (h *Hub) Unregister(containerName string, conn *websocket.Conn) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if conns, exists := h.clients[containerName]; exists {
-		delete(conns, conn)
-		if len(conns) == 0 {
-			delete(h.clients, containerName)
-		}
-	}
-}
-
-func (h *Hub) Broadcast(containerName string, msg []byte) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	for conn := range h.clients[containerName] {
-		_ = conn.WriteMessage(websocket.TextMessage, msg)
-	}
-}
-
-// StreamSplitter splits Docker output into lines, saves to S3 Buffer, and sends to WebSockets
-type StreamSplitter struct {
+// S3LogCollector buffers Docker output into lines and pushes to BufferManager
+type S3LogCollector struct {
 	containerName string
 	stream        string
 	instanceID    string
 	bufMgr        *BufferManager
-	hub           *Hub
 }
 
-func (s *StreamSplitter) Write(p []byte) (n int, err error) {
-	s.hub.Broadcast(s.containerName, p)
-
+func (s *S3LogCollector) Write(p []byte) (n int, err error) {
 	scanner := bufio.NewScanner(bytes.NewReader(p))
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -83,8 +40,8 @@ func (s *StreamSplitter) Write(p []byte) (n int, err error) {
 	return len(p), nil
 }
 
-// WatchContainers continuously detects and tails running containers in the background
-func WatchContainers(ctx context.Context, cli *client.Client, instanceID string, bufMgr *BufferManager, hub *Hub) {
+// WatchContainers continuously detects and tails running containers in the background for S3 archival
+func WatchContainers(ctx context.Context, cli *client.Client, instanceID string, bufMgr *BufferManager) {
 	activeTails := make(map[string]context.CancelFunc)
 	var mu sync.Mutex
 
@@ -122,7 +79,7 @@ func WatchContainers(ctx context.Context, cli *client.Client, instanceID string,
 				if _, exists := activeTails[name]; !exists {
 					tailCtx, cancel := context.WithCancel(ctx)
 					activeTails[name] = cancel
-					go tailContainerLogs(tailCtx, cli, name, instanceID, bufMgr, hub)
+					go tailContainerLogsForS3(tailCtx, cli, name, instanceID, bufMgr)
 				}
 				mu.Unlock()
 			}
@@ -140,8 +97,8 @@ func WatchContainers(ctx context.Context, cli *client.Client, instanceID string,
 	}
 }
 
-func tailContainerLogs(ctx context.Context, cli *client.Client, containerName, instanceID string, bufMgr *BufferManager, hub *Hub) {
-	log.Printf("[Docker] Starting log collector for: %s", containerName)
+func tailContainerLogsForS3(ctx context.Context, cli *client.Client, containerName, instanceID string, bufMgr *BufferManager) {
+	log.Printf("[S3-Archiver] Starting continuous log collector for: %s", containerName)
 	options := container.LogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
@@ -151,17 +108,17 @@ func tailContainerLogs(ctx context.Context, cli *client.Client, containerName, i
 
 	out, err := cli.ContainerLogs(ctx, containerName, options)
 	if err != nil {
-		log.Printf("[Docker] Error attaching to logs for %s: %v", containerName, err)
+		log.Printf("[S3-Archiver] Error attaching to logs for %s: %v", containerName, err)
 		return
 	}
 	defer out.Close()
 
-	stdoutWriter := &StreamSplitter{containerName: containerName, stream: "stdout", instanceID: instanceID, bufMgr: bufMgr, hub: hub}
-	stderrWriter := &StreamSplitter{containerName: containerName, stream: "stderr", instanceID: instanceID, bufMgr: bufMgr, hub: hub}
+	stdoutWriter := &S3LogCollector{containerName: containerName, stream: "stdout", instanceID: instanceID, bufMgr: bufMgr}
+	stderrWriter := &S3LogCollector{containerName: containerName, stream: "stderr", instanceID: instanceID, bufMgr: bufMgr}
 
 	// stdcopy strips the 8-byte Docker multiplexing header and routes to stdout/stderr
 	_, err = stdcopy.StdCopy(stdoutWriter, stderrWriter, out)
 	if err != nil && err != io.EOF && ctx.Err() == nil {
-		log.Printf("[Docker] Stream ended with error for %s: %v", containerName, err)
+		log.Printf("[S3-Archiver] Stream ended with error for %s: %v", containerName, err)
 	}
 }

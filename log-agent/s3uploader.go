@@ -58,7 +58,7 @@ func NewS3Uploader(ctx context.Context, bucket, prefix, region, instanceID strin
 	}, nil
 }
 
-// UploadParquet uploads Parquet bytes to Hive-partitioned S3 key
+// UploadParquet uploads Parquet bytes to day-partitioned S3 key
 func (u *S3Uploader) UploadParquet(ctx context.Context, containerName string, data []byte) error {
 	if len(data) == 0 {
 		return nil
@@ -66,17 +66,15 @@ func (u *S3Uploader) UploadParquet(ctx context.Context, containerName string, da
 
 	now := time.Now().UTC()
 	dateStr := now.Format("2006-01-02")
-	hourStr := now.Format("15")
 	seq := atomic.AddUint64(&u.seqCounter, 1)
 
-	// S3 Hive partition format:
-	// logs/instance_id=i-xxx/container=app/date=2026-08-17/hour=18/part-1723908000-0001.parquet
-	key := fmt.Sprintf("%sinstance_id=%s/container=%s/date=%s/hour=%s/part-%d-%04d.parquet",
+	// S3 Day-based partition format:
+	// logs/instance_id=i-xxx/container=app/date=2026-08-17/part-1723908000-0001.parquet
+	key := fmt.Sprintf("%sinstance_id=%s/container=%s/date=%s/part-%d-%04d.parquet",
 		u.prefix,
 		u.instanceID,
 		containerName,
 		dateStr,
-		hourStr,
 		now.Unix(),
 		seq%10000,
 	)
