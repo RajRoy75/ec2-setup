@@ -872,9 +872,11 @@
         <div class="card">
             <div class="card-header">
                 <h3>🔍 Search & Filter S3 Parquet Logs</h3>
-                <div style="display: flex; gap: 0.4rem;">
+                <div style="display: flex; gap: 0.4rem; flex-wrap: wrap;">
                     <button class="btn-quick" onclick="setQuickDate(0)">Today</button>
                     <button class="btn-quick" onclick="setQuickDate(-1)">Yesterday</button>
+                    <button class="btn-quick" onclick="clearDateFilter()">All Dates</button>
+                    <button class="btn-success" onclick="triggerS3FlushAndRefresh()" style="padding: 0.25rem 0.6rem; font-size: 0.72rem;">⚡ Force Flush to S3</button>
                 </div>
             </div>
 
@@ -893,7 +895,7 @@
 
                 <div class="form-group">
                     <label>Filter Instance ID</label>
-                    <input type="text" id="parquet-instance-filter" placeholder="all instances...">
+                    <input type="text" id="parquet-instance-filter" placeholder="all instances..." onchange="fetchParquetFiles()">
                 </div>
 
                 <div>
@@ -1192,6 +1194,8 @@
 
             if (viewName === 'split') {
                 syncSplitView();
+            } else if (viewName === 'parquet') {
+                fetchParquetFiles();
             }
         }
 
@@ -1200,6 +1204,18 @@
             d.setDate(d.getDate() + offsetDays);
             document.getElementById('parquet-date').value = d.toISOString().split('T')[0];
             fetchParquetFiles();
+        }
+
+        function clearDateFilter() {
+            document.getElementById('parquet-date').value = "";
+            fetchParquetFiles();
+        }
+
+        async function triggerS3FlushAndRefresh() {
+            await triggerS3Flush();
+            setTimeout(() => {
+                fetchParquetFiles();
+            }, 1200);
         }
 
         function parseUrls(inputUrl) {
@@ -1606,15 +1622,8 @@
             wsBadge.textContent = "Connecting...";
 
             const tailParam = fullHistory ? "&tail=0" : "&tail=150";
-            let wsUrl = "";
-
-            if (currentMachineId) {
-                const { wsBase } = getMetricsUrls();
-                wsUrl = `${wsBase}/ws/logs?machine=${encodeURIComponent(currentMachineId)}&container=${encodeURIComponent(containerName)}${tailParam}`;
-            } else {
-                const { wsBase } = getAgentUrls();
-                wsUrl = `${wsBase}/logs?container=${encodeURIComponent(containerName)}${tailParam}`;
-            }
+            const { wsBase } = getAgentUrls();
+            const wsUrl = `${wsBase}/logs?container=${encodeURIComponent(containerName)}${tailParam}`;
 
             try {
                 logWs = new WebSocket(wsUrl);

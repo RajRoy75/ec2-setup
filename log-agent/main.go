@@ -155,17 +155,17 @@ func main() {
 		_ = json.NewEncoder(w).Encode(names)
 	}))
 
-	// WS /logs?container=<name>&tail=<n>
-	http.HandleFunc("/logs", func(w http.ResponseWriter, r *http.Request) {
+	// WS /logs and /ws/logs?container=<name>&tail=<n>
+	logsHandler := func(w http.ResponseWriter, r *http.Request) {
 		containerName := r.URL.Query().Get("container")
 		if containerName == "" {
 			http.Error(w, "missing container parameter", http.StatusBadRequest)
 			return
 		}
 
-		// Support ?tail=0 or ?tail=all for full history (used by test.html "Load Full History")
+		// Support ?tail=0 or ?tail=all for full history
 		tailParam := r.URL.Query().Get("tail")
-		tailSetting := "100"
+		tailSetting := "150"
 		if tailParam == "0" || tailParam == "all" {
 			tailSetting = "all"
 		} else if tailParam != "" {
@@ -211,7 +211,9 @@ func main() {
 		if err != nil && logCtx.Err() == nil {
 			log.Printf("Streaming ended for %s: %v", containerName, err)
 		}
-	})
+	}
+	http.HandleFunc("/logs", logsHandler)
+	http.HandleFunc("/ws/logs", logsHandler)
 
 	// GET /health
 	http.HandleFunc("/health", enableCORS(func(w http.ResponseWriter, r *http.Request) {
