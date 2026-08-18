@@ -107,19 +107,22 @@ jobs:
             mkdir -p ~/.ssh
             ssh-keyscan -H -T 10 "$HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
-            # 2. First-Time & Existing Server Prep + Stop Older Running Versions
-            echo "🛑 Stopping any older running containers (if existing)..."
+            # 2. First-Time & Existing Server Prep + Graceful S3 Flush & Shutdown
+            echo "🛑 Gracefully flushing and stopping older running containers..."
             ssh -o StrictHostKeyChecking=no "$SSH_USER@$HOST" "
               # Ensure deployment directory exists
               mkdir -p $DEPLOY_PATH
 
-              # If compose file exists, gracefully bring down previous containers
+              # Explicitly trigger S3 log flush on currently running agent before stopping
+              curl -s -X POST http://localhost:8081/flush >/dev/null 2>&1 || true
+
+              # If compose file exists, gracefully bring down previous containers (30s grace period for S3 upload)
               if [ -f \"$DEPLOY_PATH/docker-compose.yml\" ]; then
-                cd $DEPLOY_PATH && (docker compose down || docker-compose down || true)
+                cd $DEPLOY_PATH && (docker compose down --timeout 30 || docker-compose down --timeout 30 || true)
               fi
 
-              # Stop and remove any lingering standalone containers
-              docker stop log-agent node-exporter 2>/dev/null || true
+              # Stop and remove any lingering standalone containers gracefully
+              docker stop --time 30 log-agent node-exporter 2>/dev/null || true
               docker rm log-agent node-exporter 2>/dev/null || true
             "
 

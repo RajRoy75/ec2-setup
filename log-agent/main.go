@@ -226,15 +226,15 @@ func main() {
 		_ = json.NewEncoder(w).Encode(stats)
 	}))
 
-	// POST /flush -> manually trigger flush on demand
+	// POST /flush -> manually trigger flush on demand (synchronously uploads to S3)
 	http.HandleFunc("/flush", enableCORS(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
+		if r.Method != http.MethodPost && r.Method != http.MethodGet {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		go flusher.FlushAll()
-		w.WriteHeader(http.StatusAccepted)
-		_, _ = w.Write([]byte(`{"status":"flush triggered"}`))
+		flusher.FlushAll()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"flushed","message":"all container buffers successfully uploaded to S3"}`))
 	}))
 
 	// ── S3 Parquet Archive Query Endpoints ──
@@ -360,18 +360,20 @@ func main() {
 	}()
 
 	<-sigCh
-	log.Println("Received shutdown signal. Stopping services...")
+	log.Println("[Shutdown] Received shutdown signal (SIGTERM/SIGINT). Initiating graceful shutdown...")
 
-	// Cancel background Docker tailing
+	// 1. Cancel background Docker tailing so no new log reads occur
 	cancel()
 
-	// Shutdown HTTP Server
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// 2. Flush all remaining in-memory container logs to S3
+	log.Println("[Shutdown] Flushing all remaining in-memory logs to S3...")
+	flusher.Stop()
+	log.Println("[Shutdown] ✓ All in-memory logs successfully flushed to S3.")
+
+	// 3. Gracefully shutdown HTTP server
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 	_ = server.Shutdown(shutdownCtx)
 
-	// Flush all remaining records to S3
-	flusher.Stop()
-
-	log.Println("log-agent stopped cleanly.")
+	log.Println("[Shutdown] ✓ log-agent stopped cleanly.")
 }

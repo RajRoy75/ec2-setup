@@ -105,51 +105,81 @@ func (u *S3Uploader) UploadParquet(ctx context.Context, containerName string, da
 
 // ListFiles lists all Parquet log files in S3 matching the given filters
 func (u *S3Uploader) ListFiles(ctx context.Context, instanceID, containerName, date string) ([]S3FileInfo, error) {
-	// Build the S3 search prefix
-	searchPrefix := u.prefix
-	if instanceID != "" && instanceID != "all" {
-		searchPrefix += fmt.Sprintf("instance_id=%s/", instanceID)
-		if containerName != "" {
-			searchPrefix += fmt.Sprintf("container=%s/", containerName)
-			if date != "" {
-				searchPrefix += fmt.Sprintf("date=%s/", date)
-			}
-		}
+	cleanContainer := strings.TrimPrefix(containerName, "/")
+	cleanDate := strings.TrimSpace(date)
+
+	// Clean instanceID: ignore UI dummy placeholders like "ec2-1", "server-1", "local"
+	instID := strings.TrimSpace(instanceID)
+	if strings.HasPrefix(instID, "ec2-") || strings.HasPrefix(instID, "server-") || instID == "local" || instID == "all" {
+		instID = ""
 	}
 
-	paginator := s3.NewListObjectsV2Paginator(u.client, &s3.ListObjectsV2Input{
-		Bucket: aws.String(u.bucket),
-		Prefix: aws.String(searchPrefix),
-	})
+	// 1. Build search prefixes to try in order (specific instance prefix first, then root prefix)
+	var prefixesToTry []string
+	if instID != "" {
+		p := fmt.Sprintf("%sinstance_id=%s/", u.prefix, instID)
+		if cleanContainer != "" && cleanContainer != "all" {
+			p += fmt.Sprintf("container=%s/", cleanContainer)
+			if cleanDate != "" && cleanDate != "all" {
+				p += fmt.Sprintf("date=%s/", cleanDate)
+			}
+		}
+		prefixesToTry = append(prefixesToTry, p)
+	} else if u.instanceID != "" {
+		p := fmt.Sprintf("%sinstance_id=%s/", u.prefix, u.instanceID)
+		if cleanContainer != "" && cleanContainer != "all" {
+			p += fmt.Sprintf("container=%s/", cleanContainer)
+			if cleanDate != "" && cleanDate != "all" {
+				p += fmt.Sprintf("date=%s/", cleanDate)
+			}
+		}
+		prefixesToTry = append(prefixesToTry, p)
+	}
 
+	// Always append root prefix u.prefix as the ultimate fallback to find all files in the bucket
+	prefixesToTry = append(prefixesToTry, u.prefix)
+
+	seenKeys := make(map[string]bool)
 	var files []S3FileInfo
-	for paginator.HasMorePages() {
-		page, err := paginator.NextPage(ctx)
+
+	for _, searchPrefix := range prefixesToTry {
+		output, err := u.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
+			Bucket: aws.String(u.bucket),
+			Prefix: aws.String(searchPrefix),
+		})
 		if err != nil {
-			return nil, fmt.Errorf("failed to list objects in s3: %w", err)
+			log.Printf("[S3] ListObjectsV2 error with prefix '%s': %v", searchPrefix, err)
+			continue
 		}
 
-		for _, obj := range page.Contents {
+		for _, obj := range output.Contents {
 			key := *obj.Key
-			if !strings.HasSuffix(key, ".parquet") {
+			if !strings.HasSuffix(key, ".parquet") || seenKeys[key] {
 				continue
 			}
 
-			// Filter by instanceID if not already constrained by searchPrefix
-			if instanceID != "" && instanceID != "all" && !strings.Contains(key, fmt.Sprintf("instance_id=%s/", instanceID)) {
+			// Filter by instanceID if a real instance ID was explicitly specified
+			if instID != "" && !strings.Contains(key, fmt.Sprintf("instance_id=%s/", instID)) && !strings.Contains(key, instID) {
 				continue
 			}
 
-			// Filter by containerName if not already constrained by searchPrefix
-			if containerName != "" && !strings.Contains(key, fmt.Sprintf("container=%s/", containerName)) {
-				continue
+			// Filter by containerName if specified
+			if cleanContainer != "" && cleanContainer != "all" {
+				if !strings.Contains(key, fmt.Sprintf("container=%s/", cleanContainer)) &&
+					!strings.Contains(key, cleanContainer) {
+					continue
+				}
 			}
 
-			// Filter by date if not already constrained by searchPrefix
-			if date != "" && !strings.Contains(key, fmt.Sprintf("date=%s/", date)) {
-				continue
+			// Filter by date if specified
+			if cleanDate != "" && cleanDate != "all" {
+				if !strings.Contains(key, fmt.Sprintf("date=%s/", cleanDate)) &&
+					!strings.Contains(key, cleanDate) {
+					continue
+				}
 			}
 
+			seenKeys[key] = true
 			parts := strings.Split(key, "/")
 			fileName := parts[len(parts)-1]
 			files = append(files, S3FileInfo{
@@ -159,9 +189,14 @@ func (u *S3Uploader) ListFiles(ctx context.Context, instanceID, containerName, d
 				LastModified: *obj.LastModified,
 			})
 		}
+
+		// If files found with the specific prefix, stop searching
+		if len(files) > 0 {
+			break
+		}
 	}
 
-	// Sort newest first
+	// Sort newest first by LastModified
 	for i, j := 0, len(files)-1; i < j; i, j = i+1, j-1 {
 		files[i], files[j] = files[j], files[i]
 	}

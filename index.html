@@ -1094,7 +1094,7 @@
             document.getElementById('target-ip-input').value = ip;
             document.getElementById('metrics-url').value = srv.metrics_url || `http://${ip}:8081`;
             document.getElementById('agent-url').value = srv.agent_url || `http://${ip}:8081`;
-            document.getElementById('parquet-instance-filter').value = srv.id || "";
+            document.getElementById('parquet-instance-filter').value = "";
 
             try {
                 localStorage.setItem('logstream_selected_ip', ip);
@@ -1211,11 +1211,18 @@
             fetchParquetFiles();
         }
 
+        function resetAndFetchAllParquet() {
+            document.getElementById('parquet-container-select').value = "";
+            document.getElementById('parquet-date').value = "";
+            document.getElementById('parquet-instance-filter').value = "";
+            fetchParquetFiles();
+        }
+
         async function triggerS3FlushAndRefresh() {
             await triggerS3Flush();
             setTimeout(() => {
                 fetchParquetFiles();
-            }, 1200);
+            }, 600);
         }
 
         function parseUrls(inputUrl) {
@@ -1510,12 +1517,8 @@
                 // 1. Health check
                 const healthRes = await fetch(`${httpBase}/health`, { signal: AbortSignal.timeout(4000) });
                 if (healthRes.ok) {
-                    const health = await healthRes.json();
                     statusBadge.className = "status-badge status-online";
                     statusBadge.textContent = "Agent: Online";
-                    if (health.instance_id && !document.getElementById('parquet-instance-filter').value) {
-                        document.getElementById('parquet-instance-filter').value = health.instance_id;
-                    }
                 }
 
                 // 2. Containers list
@@ -1924,7 +1927,15 @@
                 document.getElementById('parquet-files-count').textContent = `${files.length} Files`;
 
                 if (files.length === 0) {
-                    filesContainer.innerHTML = `<div class='status-msg'>No Parquet files found in S3 for date: <strong>${date}</strong></div>`;
+                    filesContainer.innerHTML = `
+                        <div class='status-msg' style='display: flex; flex-direction: column; align-items: center; gap: 0.8rem; padding: 2rem;'>
+                            <p>No Parquet archive files found matching the current filters (Container: <strong>${containerName || 'All'}</strong>, Date: <strong>${date || 'All'}</strong>, Instance: <strong>${instId || 'All'}</strong>).</p>
+                            <div style="display: flex; gap: 0.6rem;">
+                                <button class="btn-primary" onclick="resetAndFetchAllParquet()">🔎 Show All Files in S3 Bucket</button>
+                                <button class="btn-success" onclick="triggerS3FlushAndRefresh()">⚡ Force Flush Active Containers to S3</button>
+                            </div>
+                        </div>
+                    `;
                     return;
                 }
 

@@ -18,7 +18,10 @@ services:
   log-agent:
     build: ./log-agent
     container_name: log-agent
+    pid: "host"
     restart: unless-stopped
+    stop_grace_period: 30s
+    stop_signal: SIGTERM
     ports:
       - "8081:8081"
     environment:
