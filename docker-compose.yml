@@ -27,8 +27,9 @@ services:
       - AWS_REGION=${AWS_REGION:-us-east-1}
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-      - FLUSH_INTERVAL=${FLUSH_INTERVAL:-5m}
-      - FLUSH_BATCH_SIZE=${FLUSH_BATCH_SIZE:-10000}
+      - FLUSH_INTERVAL=${FLUSH_INTERVAL:-30m}
+      - BUFFER_SIZE_MB=${BUFFER_SIZE_MB:-1}
+      - SERVERS=${SERVERS}
     volumes:
       # Mount the Docker socket so the log-agent can read Docker container logs
       - /var/run/docker.sock:/var/run/docker.sock:ro

@@ -2,6 +2,7 @@ package main
 
 import (
 	"sync"
+	"time"
 )
 
 // LogRecord represents a single row in the Parquet and JSON schema
@@ -13,30 +14,41 @@ type LogRecord struct {
 	Message       string `parquet:"message" json:"message"`
 }
 
-// ContainerBuffer stores records for one specific container
+// ContainerBuffer stores records for one specific container with a byte-size threshold
 type ContainerBuffer struct {
-	mu      sync.Mutex
-	records []LogRecord
-	maxSize int
+	mu           sync.Mutex
+	records      []LogRecord
+	currentBytes int
+	maxBytes     int
+	lastFlushed  time.Time
 }
 
-func NewContainerBuffer(maxSize int) *ContainerBuffer {
+func NewContainerBuffer(maxBytes int) *ContainerBuffer {
+	if maxBytes <= 0 {
+		maxBytes = 1 * 1024 * 1024 // default 1MB buffer
+	}
 	return &ContainerBuffer{
-		records: make([]LogRecord, 0, maxSize),
-		maxSize: maxSize,
+		records:      make([]LogRecord, 0, 1024),
+		currentBytes: 0,
+		maxBytes:     maxBytes,
+		lastFlushed:  time.Now(),
 	}
 }
 
-// Append adds a record and returns true if the buffer has reached maxSize
+// Append adds a record, tracks byte memory usage, and returns true if the buffer has reached maxBytes (e.g., 1MB)
 func (b *ContainerBuffer) Append(rec LogRecord) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	// Approximate memory usage of the record: message string length + stream + metadata overhead (~32 bytes)
+	recordSize := len(rec.Message) + len(rec.Stream) + len(rec.InstanceID) + len(rec.ContainerName) + 32
 	b.records = append(b.records, rec)
-	return len(b.records) >= b.maxSize
+	b.currentBytes += recordSize
+
+	return b.currentBytes >= b.maxBytes
 }
 
-// Drain clears the buffer and returns all collected records
+// Drain clears the buffer and returns all collected records and resets byte counter
 func (b *ContainerBuffer) Drain() []LogRecord {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -46,7 +58,9 @@ func (b *ContainerBuffer) Drain() []LogRecord {
 	}
 
 	out := b.records
-	b.records = make([]LogRecord, 0, b.maxSize)
+	b.records = make([]LogRecord, 0, 1024)
+	b.currentBytes = 0
+	b.lastFlushed = time.Now()
 	return out
 }
 
@@ -57,18 +71,28 @@ func (b *ContainerBuffer) Count() int {
 	return len(b.records)
 }
 
-// BufferManager manages buffers for all running containers
+// Bytes returns the current byte size in the buffer
+func (b *ContainerBuffer) Bytes() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.currentBytes
+}
+
+// BufferManager manages 1MB memory buffers for all running containers
 type BufferManager struct {
 	mu          sync.RWMutex
 	buffers     map[string]*ContainerBuffer
-	batchSize   int
+	maxBytes    int
 	onFullBatch func(containerName string)
 }
 
-func NewBufferManager(batchSize int, onFullBatch func(containerName string)) *BufferManager {
+func NewBufferManager(maxBytes int, onFullBatch func(containerName string)) *BufferManager {
+	if maxBytes <= 0 {
+		maxBytes = 1 * 1024 * 1024 // default 1MB
+	}
 	return &BufferManager{
 		buffers:     make(map[string]*ContainerBuffer),
-		batchSize:   batchSize,
+		maxBytes:    maxBytes,
 		onFullBatch: onFullBatch,
 	}
 }
@@ -80,7 +104,7 @@ func (bm *BufferManager) GetOrCreate(containerName string) *ContainerBuffer {
 	if buf, exists := bm.buffers[containerName]; exists {
 		return buf
 	}
-	buf := NewContainerBuffer(bm.batchSize)
+	buf := NewContainerBuffer(bm.maxBytes)
 	bm.buffers[containerName] = buf
 	return buf
 }
@@ -103,13 +127,16 @@ func (bm *BufferManager) GetAllContainers() []string {
 	return keys
 }
 
-func (bm *BufferManager) Stats() map[string]int {
+func (bm *BufferManager) Stats() map[string]map[string]int {
 	bm.mu.RLock()
 	defer bm.mu.RUnlock()
 
-	stats := make(map[string]int)
+	stats := make(map[string]map[string]int)
 	for k, v := range bm.buffers {
-		stats[k] = v.Count()
+		stats[k] = map[string]int{
+			"records": v.Count(),
+			"bytes":   v.Bytes(),
+		}
 	}
 	return stats
 }

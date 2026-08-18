@@ -1,0 +1,178 @@
+name: Deploy Log-Agent & Node-Exporter to Multiple Servers
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      target_server:
+        description: 'Specific server to deploy to (or "all" for all servers)'
+        required: false
+        default: 'all'
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────────────
+  # 1. Validation & Test Job
+  # ──────────────────────────────────────────────────────────────────────────
+  test:
+    name: 🧪 Test & Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache-dependency-path: log-agent/go.sum
+
+      - name: Test Go log-agent
+        run: |
+          cd log-agent
+          go test -v ./...
+
+      - name: Validate Docker Compose Config
+        run: |
+          docker compose config -q
+        env:
+          S3_BUCKET: test-bucket
+          AWS_ACCESS_KEY_ID: test-key
+          AWS_SECRET_ACCESS_KEY: test-secret
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # 2. Multi-Server Deployment Job
+  # ──────────────────────────────────────────────────────────────────────────
+  deploy:
+    name: 🚀 Deploy to Servers
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up SSH Key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY || secrets.EC2_SSH_KEY }}
+
+      - name: Deploy to Remote Servers
+        env:
+          SSH_USER: ${{ secrets.EC2_USER || secrets.SSH_USER || secrets.HOST_USER || 'ubuntu' }}
+          # Comma, space, or newline separated list of EC2 hostnames or IPs
+          # Examples:
+          # ec2-100-53-72-216.compute-1.amazonaws.com, ec2-54-210-12-34.compute-1.amazonaws.com
+          SERVERS_LIST: ${{ secrets.EC2_HOSTS || secrets.SERVER_HOSTS || secrets.HOSTS }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH || '/home/ubuntu/ec2-setup' }}
+          
+          # Entire .env file content pasted directly as a secret
+          ENV_FILE: ${{ secrets.ENV_FILE }}
+        run: |
+          if [ -z "$ENV_FILE" ]; then
+            echo "❌ ERROR: secrets.ENV_FILE is empty."
+            echo "Please add your complete .env file content to GitHub Secrets under 'ENV_FILE'."
+            exit 1
+          fi
+
+          # Split server hosts by comma, space, or newline
+          IFS=', ' read -r -a SERVERS <<< "$(echo "$SERVERS_LIST" | tr '\n' ' ')"
+
+          if [ ${#SERVERS[@]} -eq 0 ] || [ -z "${SERVERS[0]}" ]; then
+            echo "❌ ERROR: No server hosts found in secrets.EC2_HOSTS."
+            echo "Please set secrets.EC2_HOSTS in GitHub Repository Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+
+          echo "🚀 Starting deployment across ${#SERVERS[@]} server(s)..."
+
+          for HOST in "${SERVERS[@]}"; do
+            HOST=$(echo "$HOST" | xargs) # trim whitespace
+            if [ -z "$HOST" ]; then continue; fi
+
+            # Check if workflow_dispatch target filter is specified
+            if [ "${{ github.event.inputs.target_server }}" != "" ] && \
+               [ "${{ github.event.inputs.target_server }}" != "all" ] && \
+               [ "${{ github.event.inputs.target_server }}" != "$HOST" ]; then
+              echo "⏭️ Skipping $HOST (targeted: ${{ github.event.inputs.target_server }})"
+              continue
+            fi
+
+            echo "=========================================================="
+            echo "📡 Deploying to: $HOST"
+            echo "=========================================================="
+
+            # 1. Add host key to known_hosts to prevent interactive prompts
+            mkdir -p ~/.ssh
+            ssh-keyscan -H -T 10 "$HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+            # 2. First-Time & Existing Server Prep + Stop Older Running Versions
+            echo "🛑 Stopping any older running containers (if existing)..."
+            ssh -o StrictHostKeyChecking=no "$SSH_USER@$HOST" "
+              # Ensure deployment directory exists
+              mkdir -p $DEPLOY_PATH
+
+              # If compose file exists, gracefully bring down previous containers
+              if [ -f \"$DEPLOY_PATH/docker-compose.yml\" ]; then
+                cd $DEPLOY_PATH && (docker compose down || docker-compose down || true)
+              fi
+
+              # Stop and remove any lingering standalone containers
+              docker stop log-agent node-exporter 2>/dev/null || true
+              docker rm log-agent node-exporter 2>/dev/null || true
+            "
+
+            # 3. Rsync latest code to server (clean sync excluding git/github)
+            echo "📦 Syncing latest codebase to $DEPLOY_PATH..."
+            rsync -avz --delete \
+              --exclude '.git' \
+              --exclude '.github' \
+              --exclude '.env' \
+              ./ "$SSH_USER@$HOST:$DEPLOY_PATH/"
+
+            # 4. Write updated .env file directly from ENV_FILE secret (lossless Base64 transfer)
+            echo "🔐 Updating .env configuration..."
+            printf "%s" "$ENV_FILE" | base64 | ssh -o StrictHostKeyChecking=no "$SSH_USER@$HOST" "base64 -d > $DEPLOY_PATH/.env"
+
+            # 5. Build and launch new containers with Docker Compose
+            echo "🐳 Building and starting latest containers..."
+            ssh -o StrictHostKeyChecking=no "$SSH_USER@$HOST" "
+              cd $DEPLOY_PATH
+              docker compose up -d --build --force-recreate --remove-orphans || docker-compose up -d --build --force-recreate --remove-orphans
+            "
+
+            # 6. Verify health with retry loop
+            echo "🩺 Verifying health endpoint..."
+            ssh -o StrictHostKeyChecking=no "$SSH_USER@$HOST" "
+              PORT=\$(grep -E '^PORT=' $DEPLOY_PATH/.env | cut -d '=' -f2 | tr -d ' \"\r' || echo '8081')
+              PORT=\${PORT:-8081}
+              
+              SUCCESS=0
+              for i in {1..6}; do
+                echo \"Health check attempt \$i/6 on port \$PORT...\"
+                if curl -sf http://localhost:\$PORT/health > /dev/null; then
+                  echo \"✓ Health check passed! Service is live and healthy.\"
+                  SUCCESS=1
+                  break
+                fi
+                sleep 3
+              done
+
+              if [ \$SUCCESS -ne 1 ]; then
+                echo \"❌ Health check failed after multiple attempts!\"
+                docker logs log-agent --tail 30 2>/dev/null || true
+                exit 1
+              fi
+            "
+
+            # 7. Cleanup unused and dangling images/caches
+            echo "🧹 Cleaning up old/dangling docker resources..."
+            ssh -o StrictHostKeyChecking=no "$SSH_USER@$HOST" "docker system prune -f"
+
+            echo "✅ Successfully deployed to $HOST!"
+          done
+
+          echo "=========================================================="
+          echo "🎉 All target servers successfully updated and pruned!"
+          echo "=========================================================="

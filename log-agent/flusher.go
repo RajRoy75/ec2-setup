@@ -34,6 +34,7 @@ func (f *Flusher) Start() {
 		for {
 			select {
 			case <-ticker.C:
+				// Idle safety flush: writes any logs that haven't hit the 1MB threshold within the max interval
 				f.FlushAll()
 			case <-f.stopCh:
 				return
@@ -42,7 +43,7 @@ func (f *Flusher) Start() {
 	}()
 }
 
-// FlushContainer flushes a single container's buffer
+// FlushContainer flushes a single container's buffer to S3 as an optimized Parquet file
 func (f *Flusher) FlushContainer(containerName string) {
 	buf := f.bufMgr.GetOrCreate(containerName)
 	records := buf.Drain()
@@ -52,15 +53,19 @@ func (f *Flusher) FlushContainer(containerName string) {
 
 	parquetBytes, err := EncodeToParquet(records)
 	if err != nil {
-		log.Printf("[Flusher] Parquet encode error for %s: %v", containerName, err)
+		log.Printf("[Flusher] Parquet encode error for %s (%d records): %v", containerName, len(records), err)
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	log.Printf("[Flusher] Uploading Parquet archive for container '%s' (%d records, %d bytes) to S3...", containerName, len(records), len(parquetBytes))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 
 	if err := f.uploader.UploadParquet(ctx, containerName, parquetBytes); err != nil {
-		log.Printf("[Flusher] S3 upload error for %s: %v", containerName, err)
+		log.Printf("[Flusher] ❌ S3 upload error for %s: %v", containerName, err)
+	} else {
+		log.Printf("[Flusher] ✓ Successfully archived %d records for '%s' to S3", len(records), containerName)
 	}
 }
 
@@ -72,11 +77,11 @@ func (f *Flusher) FlushAll() {
 	}
 }
 
-// Stop initiates graceful shutdown and flushes all pending logs
+// Stop initiates graceful shutdown and flushes all pending in-memory buffers to S3
 func (f *Flusher) Stop() {
 	close(f.stopCh)
 	f.wg.Wait()
-	log.Println("[Flusher] Performing final flush before shutdown...")
+	log.Println("[Flusher] Performing final flush of all memory buffers before shutdown...")
 	f.FlushAll()
-	log.Println("[Flusher] All buffers flushed successfully.")
+	log.Println("[Flusher] All memory buffers flushed successfully.")
 }

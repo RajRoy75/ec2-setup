@@ -66,23 +66,30 @@ func main() {
 	}
 	s3Prefix := getEnv("S3_PREFIX", "logs/")
 	awsRegion := os.Getenv("AWS_REGION")
-	flushIntervalStr := getEnv("FLUSH_INTERVAL", "5m")
-	flushBatchSizeStr := getEnv("FLUSH_BATCH_SIZE", "10000")
+	flushIntervalStr := getEnv("FLUSH_INTERVAL", "30m")
 	port := getEnv("PORT", "8081")
+
+	// 1MB Memory Buffer Configuration (flushes when buffer reaches 1MB)
+	bufferSizeMBStr := getEnv("BUFFER_SIZE_MB", "1")
+	bufferBytesStr := getEnv("FLUSH_BUFFER_BYTES", "")
+	bufferMaxBytes := 1024 * 1024 // default 1MB (1,048,576 bytes)
+
+	if bufferBytesStr != "" {
+		if b, err := strconv.Atoi(bufferBytesStr); err == nil && b > 0 {
+			bufferMaxBytes = b
+		}
+	} else if mb, err := strconv.ParseFloat(bufferSizeMBStr, 64); err == nil && mb > 0 {
+		bufferMaxBytes = int(mb * 1024 * 1024)
+	}
 
 	flushInterval, err := time.ParseDuration(flushIntervalStr)
 	if err != nil {
 		log.Fatalf("Invalid FLUSH_INTERVAL: %v", err)
 	}
 
-	flushBatchSize, err := strconv.Atoi(flushBatchSizeStr)
-	if err != nil {
-		log.Fatalf("Invalid FLUSH_BATCH_SIZE: %v", err)
-	}
-
 	// 1. Identify Instance / Server
 	instanceID := GetInstanceID()
-	log.Printf("Starting log-agent on instance: %s | S3 Bucket: %s | Flush Interval: %v", instanceID, s3Bucket, flushInterval)
+	log.Printf("Starting log-agent on instance: %s | S3 Bucket: %s | Buffer Memory: %d KB | Max Idle Interval: %v", instanceID, s3Bucket, bufferMaxBytes/1024, flushInterval)
 
 	// 2. Connect to Docker
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
@@ -99,10 +106,11 @@ func main() {
 		log.Fatalf("Failed to initialize S3 uploader: %v", err)
 	}
 
-	// 4. Initialize Buffer & Flusher
+	// 4. Initialize Buffer & Flusher with 1MB Memory Buffer Threshold
 	var flusher *Flusher
-	bufMgr := NewBufferManager(flushBatchSize, func(containerName string) {
+	bufMgr := NewBufferManager(bufferMaxBytes, func(containerName string) {
 		if flusher != nil {
+			log.Printf("[Buffer] Container '%s' reached 1MB threshold -> Triggering immediate S3 flush", containerName)
 			go flusher.FlushContainer(containerName)
 		}
 	})
@@ -248,6 +256,18 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(records)
 	}))
+
+	// GET /api/servers and /servers -> returns configured monitored machines from SERVERS env var
+	serversHandler := enableCORS(func(w http.ResponseWriter, r *http.Request) {
+		serversJSON := os.Getenv("SERVERS")
+		if serversJSON == "" {
+			serversJSON = fmt.Sprintf(`[{"id":"local","name":"Localhost Dev","ip":"127.0.0.1","metrics_url":"http://localhost:8080","agent_url":"http://localhost:%s"},{"id":"%s","name":"Current Machine (%s)","ip":"127.0.0.1","metrics_url":"http://localhost:8080","agent_url":"http://localhost:%s"}]`, port, instanceID, instanceID, port)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(serversJSON))
+	})
+	http.HandleFunc("/api/servers", serversHandler)
+	http.HandleFunc("/servers", serversHandler)
 
 	server := &http.Server{Addr: ":" + port}
 
