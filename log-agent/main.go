@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -121,7 +122,20 @@ func main() {
 	// 5. Start 24/7 background Docker log collector for S3
 	go WatchContainers(ctx, cli, instanceID, bufMgr)
 
-	// 6. HTTP Endpoints
+	// 6. Initialize Machine Metrics Collector & WebSocket Hub
+	metricsCollector := NewMetricsCollector(instanceID)
+	metricsHub := NewMetricsHub(metricsCollector)
+
+	// WS /ws/metrics
+	http.HandleFunc("/ws/metrics", metricsHub.HandleWS)
+	// GET /api/metrics
+	http.HandleFunc("/api/metrics", enableCORS(func(w http.ResponseWriter, r *http.Request) {
+		metric := metricsCollector.Collect()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode([]MachineMetric{metric})
+	}))
+
+	// 7. HTTP Endpoints
 	// GET /containers
 	http.HandleFunc("/containers", enableCORS(func(w http.ResponseWriter, r *http.Request) {
 		containers, err := cli.ContainerList(context.Background(), container.ListOptions{})
@@ -259,12 +273,73 @@ func main() {
 
 	// GET /api/servers and /servers -> returns configured monitored machines from SERVERS env var
 	serversHandler := enableCORS(func(w http.ResponseWriter, r *http.Request) {
-		serversJSON := os.Getenv("SERVERS")
-		if serversJSON == "" {
-			serversJSON = fmt.Sprintf(`[{"id":"local","name":"Localhost Dev","ip":"127.0.0.1","metrics_url":"http://localhost:8080","agent_url":"http://localhost:%s"},{"id":"%s","name":"Current Machine (%s)","ip":"127.0.0.1","metrics_url":"http://localhost:8080","agent_url":"http://localhost:%s"}]`, port, instanceID, instanceID, port)
-		}
+		serversRaw := os.Getenv("SERVERS")
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(serversJSON))
+
+		type ServerItem struct {
+			ID         string `json:"id"`
+			Name       string `json:"name"`
+			IP         string `json:"ip"`
+			MetricsURL string `json:"metrics_url"`
+			AgentURL   string `json:"agent_url"`
+		}
+
+		if serversRaw == "" {
+			defaultList := []ServerItem{
+				{ID: "local", Name: "Localhost Dev", IP: "127.0.0.1", MetricsURL: "http://localhost:8080", AgentURL: "http://localhost:" + port},
+				{ID: instanceID, Name: "Current Machine (" + instanceID + ")", IP: "127.0.0.1", MetricsURL: "http://localhost:8080", AgentURL: "http://localhost:" + port},
+			}
+			_ = json.NewEncoder(w).Encode(defaultList)
+			return
+		}
+
+		// Try parsing as []ServerItem
+		var objList []ServerItem
+		if err := json.Unmarshal([]byte(serversRaw), &objList); err == nil && len(objList) > 0 && objList[0].IP != "" {
+			_ = json.NewEncoder(w).Encode(objList)
+			return
+		}
+
+		// Try parsing as []string of IPs
+		var strList []string
+		if err := json.Unmarshal([]byte(serversRaw), &strList); err == nil && len(strList) > 0 {
+			var result []ServerItem
+			for i, ip := range strList {
+				ip = strings.TrimSpace(ip)
+				if ip == "" {
+					continue
+				}
+				result = append(result, ServerItem{
+					ID:         fmt.Sprintf("server-%d", i+1),
+					Name:       fmt.Sprintf("Server %d (%s)", i+1, ip),
+					IP:         ip,
+					MetricsURL: fmt.Sprintf("http://%s:8080", ip),
+					AgentURL:   fmt.Sprintf("http://%s:%s", ip, port),
+				})
+			}
+			_ = json.NewEncoder(w).Encode(result)
+			return
+		}
+
+		// Fallback: Parse comma/newline separated IPs
+		rawParts := strings.FieldsFunc(serversRaw, func(c rune) bool {
+			return c == ',' || c == '\n' || c == ';'
+		})
+		var result []ServerItem
+		for i, part := range rawParts {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			result = append(result, ServerItem{
+				ID:         fmt.Sprintf("server-%d", i+1),
+				Name:       fmt.Sprintf("Server %d (%s)", i+1, part),
+				IP:         part,
+				MetricsURL: fmt.Sprintf("http://%s:8080", part),
+				AgentURL:   fmt.Sprintf("http://%s:%s", part, port),
+			})
+		}
+		_ = json.NewEncoder(w).Encode(result)
 	})
 	http.HandleFunc("/api/servers", serversHandler)
 	http.HandleFunc("/servers", serversHandler)

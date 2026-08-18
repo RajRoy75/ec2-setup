@@ -130,11 +130,23 @@
             border: 1px solid var(--card-border);
             border-radius: 14px;
             padding: 1.1rem 1.25rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.9rem;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+        }
+
+        .config-main-row {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            grid-template-columns: 1.5fr 1.5fr auto auto;
             gap: 1rem;
             align-items: flex-end;
-            box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+        }
+
+        @media (max-width: 900px) {
+            .config-main-row {
+                grid-template-columns: 1fr;
+            }
         }
 
         .form-group {
@@ -191,6 +203,7 @@
             gap: 0.4rem;
             font-size: 0.85rem;
             font-family: inherit;
+            white-space: nowrap;
         }
 
         .btn-primary {
@@ -271,6 +284,14 @@
             height: 6px;
             background: var(--danger);
             border-radius: 50%;
+        }
+
+        .advanced-bar {
+            display: none;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+            padding-top: 0.75rem;
+            border-top: 1px solid rgba(255, 255, 255, 0.06);
         }
 
         /* Views Container */
@@ -708,45 +729,60 @@
         </div>
     </header>
 
-    <!-- Global Machine Selector & Server Config Bar -->
+    <!-- Global Machine Selector & Simple IP Config Bar -->
     <div class="server-config-card">
-        <!-- Machine Dropdown (Populated from .env SERVERS) -->
-        <div class="form-group" style="flex: 1.4;">
-            <label>
-                <span>🖥️ Monitored Machine (from .env)</span>
-                <span id="env-servers-count" class="badge-count" style="font-size: 0.68rem; padding: 0.1rem 0.4rem;">0 Loaded</span>
-            </label>
-            <select id="machine-dropdown" onchange="onMachineDropdownChange()">
-                <option value="">Loading machines from .env...</option>
-            </select>
-        </div>
+        <div class="config-main-row">
+            <!-- Machine Dropdown -->
+            <div class="form-group">
+                <label>
+                    <span>🖥️ Select Machine</span>
+                    <span id="machines-count-badge" class="badge-count" style="font-size: 0.68rem; padding: 0.1rem 0.4rem;">0 Loaded</span>
+                </label>
+                <select id="machine-dropdown" onchange="onMachineDropdownChange()">
+                    <option value="">Loading machines...</option>
+                </select>
+            </div>
 
-        <!-- Metrics Server URL -->
-        <div class="form-group" style="flex: 1.2;">
-            <label>📊 Metrics Endpoint (/ws/metrics)</label>
-            <input type="text" id="metrics-url" value="http://localhost:8080" placeholder="http://localhost:8080 or http://<server-ip>:8080" onchange="initMetricsConnection(false)">
-        </div>
+            <!-- Simple Direct IP / Host Input -->
+            <div class="form-group">
+                <label>
+                    <span>🌐 Target IP or Hostname</span>
+                    <button class="btn-quick" onclick="toggleAdvancedSettings()" style="padding: 0.1rem 0.4rem; font-size: 0.68rem;">⚙️ Ports</button>
+                </label>
+                <div style="display: flex; gap: 0.4rem;">
+                    <input type="text" id="target-ip-input" placeholder="e.g. 3.86.31.118 or localhost" onkeydown="if(event.key==='Enter') applyCustomIP()">
+                    <button class="btn-primary" onclick="applyCustomIP()" title="Connect to this IP">Connect</button>
+                    <button class="btn-secondary" onclick="addCurrentIPToList()" title="Save this IP to dropdown">➕ Save</button>
+                </div>
+            </div>
 
-        <!-- Log Agent & S3 Server URL -->
-        <div class="form-group" style="flex: 1.2;">
-            <label>📦 Log-Agent & S3 (/logs, /api/archive)</label>
-            <input type="text" id="agent-url" value="http://localhost:8081" placeholder="http://localhost:8081 or http://<server-ip>:8081" onchange="autoDetectAgentServer()">
-        </div>
+            <!-- Live Status Badges -->
+            <div class="form-group">
+                <label>Status</label>
+                <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
+                    <span id="metrics-status" class="status-badge status-offline">Metrics: Offline</span>
+                    <span id="agent-status" class="status-badge status-offline">Agent: Offline</span>
+                </div>
+            </div>
 
-        <!-- Live Status Indicators -->
-        <div class="form-group">
-            <label>Connection Status</label>
-            <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
-                <span id="metrics-status" class="status-badge status-offline">Metrics: Offline</span>
-                <span id="agent-status" class="status-badge status-offline">Agent: Offline</span>
+            <!-- Action Buttons -->
+            <div style="display: flex; gap: 0.4rem;">
+                <button class="btn-success" onclick="triggerS3Flush()" id="btn-flush" title="Trigger instant flush of buffer to S3">
+                    <span>⚡ Force S3 Flush</span>
+                </button>
             </div>
         </div>
 
-        <!-- Force S3 Flush Button -->
-        <div>
-            <button class="btn-success" onclick="triggerS3Flush()" id="btn-flush" style="width: 100%;" title="Trigger instant flush of buffer to S3">
-                <span>⚡ Force S3 Flush</span>
-            </button>
+        <!-- Optional Advanced Ports Bar (Collapsible) -->
+        <div class="advanced-bar" id="advanced-settings-bar">
+            <div class="form-group">
+                <label>📊 Metrics Server URL</label>
+                <input type="text" id="metrics-url" value="http://localhost:8080" placeholder="http://<ip>:8080" onchange="initMetricsConnection()">
+            </div>
+            <div class="form-group">
+                <label>📦 Log-Agent & S3 Server URL</label>
+                <input type="text" id="agent-url" value="http://localhost:8081" placeholder="http://<ip>:8081" onchange="autoDetectAgentServer()">
+            </div>
         </div>
     </div>
 
@@ -760,11 +796,10 @@
                 <h3>📊 Monitored EC2 / Host Instances</h3>
                 <div style="display: flex; align-items: center; gap: 0.6rem;">
                     <span id="metrics-stream-label" style="font-size: 0.8rem; color: var(--text-muted);">Initializing metrics stream...</span>
-                    <button class="btn-quick" onclick="initMetricsConnection(false)">🔄 Reconnect Metrics</button>
+                    <button class="btn-quick" onclick="initMetricsConnection()">🔄 Reconnect</button>
                 </div>
             </div>
             <div class="dashboard-grid" id="machines-grid">
-                <!-- Machine Telemetry cards are injected here dynamically -->
                 <div class="stat-item" id="metrics-placeholder" style="grid-column: 1/-1; text-align: center; padding: 2rem;">
                     <p style="color: var(--text-muted); font-size: 0.95rem;">Connecting to Metrics WebSocket (<code>/ws/metrics</code>)...</p>
                 </div>
@@ -944,25 +979,23 @@
 
     <script>
         // ──────────────────────────────────────────────────────────────────────────
-        // Global State & Endpoints
+        // Global State & Persistent Machines
         // ──────────────────────────────────────────────────────────────────────────
-        const DEFAULT_SERVERS = [
-            {
-                "id": "current",
-                "name": "Current Host",
-                "ip": window.location.hostname || "127.0.0.1",
-                "metrics_url": `http://${window.location.hostname || "localhost"}:8080`,
-                "agent_url": `http://${window.location.hostname || "localhost"}:8081`
-            }
+        const PRELOADED_SERVERS = [
+            { id: "ec2-1", name: "EC2 Instance 1 (3.86.31.118)", ip: "3.86.31.118", metrics_url: "http://3.86.31.118:8081", agent_url: "http://3.86.31.118:8081" },
+            { id: "ec2-2", name: "EC2 Instance 2 (54.172.242.62)", ip: "54.172.242.62", metrics_url: "http://54.172.242.62:8081", agent_url: "http://54.172.242.62:8081" },
+            { id: "ec2-3", name: "EC2 Instance 3 (100.53.72.216)", ip: "100.53.72.216", metrics_url: "http://100.53.72.216:8081", agent_url: "http://100.53.72.216:8081" },
+            { id: "local", name: "Localhost Dev", ip: "localhost", metrics_url: "http://localhost:8081", agent_url: "http://localhost:8081" }
         ];
 
-        let configuredServers = [...DEFAULT_SERVERS];
+        let configuredServers = [];
         let activeView = 'live';
         let currentMachineId = null;
         let detectedContainers = [];
 
         // Metrics WebSocket & Chart.js State
         let metricsWs = null;
+        let metricsPollTimer = null;
         let machineCharts = {};
         const maxDataPoints = 20;
 
@@ -990,84 +1023,164 @@
         document.getElementById('parquet-date').value = new Date().toISOString().split('T')[0];
 
         // ──────────────────────────────────────────────────────────────────────────
-        // SERVER / MACHINE DETECTION FROM .ENV (/api/servers)
+        // MACHINE & IP MANAGEMENT (LOCAL STORAGE + .ENV SYNC)
         // ──────────────────────────────────────────────────────────────────────────
-        async function loadConfiguredServers() {
-            const dropdown = document.getElementById('machine-dropdown');
-            const countBadge = document.getElementById('env-servers-count');
-            
-            // Try fetching /api/servers from the current agent URL or localhost:8081
-            let agentBase = document.getElementById('agent-url').value.trim().replace(/\/+$/, "");
-            if (!/^https?:\/\//i.test(agentBase)) agentBase = 'http://' + agentBase;
-
-            let fetched = null;
-            try {
-                const res = await fetch(`${agentBase}/api/servers`, { signal: AbortSignal.timeout(3000) });
-                if (res.ok) {
-                    fetched = await res.json();
-                }
-            } catch(e) {
-                // Fallback to localhost:8081 if current agent is unreachable
+        function loadMachines() {
+            const saved = localStorage.getItem('logstream_machines');
+            if (saved) {
                 try {
-                    const res2 = await fetch(`http://localhost:8081/api/servers`, { signal: AbortSignal.timeout(2000) });
-                    if (res2.ok) fetched = await res2.json();
-                } catch(e2) {}
+                    const parsed = JSON.parse(saved);
+                    if (Array.isArray(parsed) && parsed.length > 0) {
+                        configuredServers = parsed;
+                    }
+                } catch(e){}
             }
 
-            if (Array.isArray(fetched) && fetched.length > 0) {
-                configuredServers = fetched;
+            if (configuredServers.length === 0) {
+                configuredServers = [...PRELOADED_SERVERS];
+                saveMachinesToStorage();
             }
 
-            countBadge.textContent = `${configuredServers.length} Available`;
+            renderMachineDropdown();
+            syncWithBackendServers();
+        }
+
+        function saveMachinesToStorage() {
+            try {
+                localStorage.setItem('logstream_machines', JSON.stringify(configuredServers));
+            } catch(e){}
+        }
+
+        function renderMachineDropdown() {
+            const dropdown = document.getElementById('machine-dropdown');
+            const countBadge = document.getElementById('machines-count-badge');
+            
             dropdown.innerHTML = "";
+            countBadge.textContent = `${configuredServers.length} Available`;
 
             configuredServers.forEach((srv, idx) => {
                 const opt = document.createElement("option");
                 opt.value = idx;
-                opt.textContent = `🖥️ ${srv.name || srv.id} (${srv.ip || srv.metrics_url || ''})`;
+                opt.textContent = `🖥️ ${srv.name || srv.ip} (${srv.ip})`;
                 dropdown.appendChild(opt);
             });
 
-            // Set to first server if not already set
-            if (dropdown.options.length > 0) {
-                dropdown.selectedIndex = 0;
-                applySelectedServer(configuredServers[0]);
+            const lastIp = localStorage.getItem('logstream_selected_ip');
+            let selectedIdx = 0;
+            if (lastIp) {
+                const found = configuredServers.findIndex(s => s.ip === lastIp || s.agent_url?.includes(lastIp));
+                if (found !== -1) selectedIdx = found;
+            }
+
+            if (configuredServers.length > 0) {
+                dropdown.selectedIndex = selectedIdx;
+                applyServer(configuredServers[selectedIdx]);
             }
         }
 
         function onMachineDropdownChange() {
             const dropdown = document.getElementById('machine-dropdown');
-            const selectedIdx = parseInt(dropdown.value, 10);
-            if (!isNaN(selectedIdx) && configuredServers[selectedIdx]) {
-                applySelectedServer(configuredServers[selectedIdx]);
+            const idx = parseInt(dropdown.value, 10);
+            if (!isNaN(idx) && configuredServers[idx]) {
+                applyServer(configuredServers[idx]);
             }
         }
 
-        function applySelectedServer(srv) {
+        function applyServer(srv) {
             if (!srv) return;
-            if (srv.metrics_url) {
-                document.getElementById('metrics-url').value = srv.metrics_url;
-            } else if (srv.ip) {
-                document.getElementById('metrics-url').value = `http://${srv.ip}:8080`;
-            }
+            const ip = srv.ip || "localhost";
+            document.getElementById('target-ip-input').value = ip;
+            document.getElementById('metrics-url').value = srv.metrics_url || `http://${ip}:8081`;
+            document.getElementById('agent-url').value = srv.agent_url || `http://${ip}:8081`;
+            document.getElementById('parquet-instance-filter').value = srv.id || "";
 
-            if (srv.agent_url) {
-                document.getElementById('agent-url').value = srv.agent_url;
-            } else if (srv.ip) {
-                document.getElementById('agent-url').value = `http://${srv.ip}:8081`;
-            }
+            try {
+                localStorage.setItem('logstream_selected_ip', ip);
+            } catch(e){}
 
-            if (srv.id) {
-                document.getElementById('parquet-instance-filter').value = srv.id;
-            }
-
-            // Connect to this machine's metrics and agent
-            initMetricsConnection(false);
+            initMetricsConnection();
             autoDetectAgentServer();
         }
 
+        function applyCustomIP() {
+            const input = document.getElementById('target-ip-input');
+            let raw = input.value.trim();
+            if (!raw) return;
+
+            raw = raw.replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
+            const ip = raw.split(':')[0];
+
+            document.getElementById('target-ip-input').value = ip;
+            document.getElementById('metrics-url').value = `http://${ip}:8081`;
+            document.getElementById('agent-url').value = `http://${ip}:8081`;
+
+            try {
+                localStorage.setItem('logstream_selected_ip', ip);
+            } catch(e){}
+
+            initMetricsConnection();
+            autoDetectAgentServer();
+        }
+
+        function addCurrentIPToList() {
+            const input = document.getElementById('target-ip-input');
+            let raw = input.value.trim();
+            if (!raw) {
+                alert("Please enter an IP address or hostname first.");
+                return;
+            }
+
+            raw = raw.replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
+            const ip = raw.split(':')[0];
+            const existing = configuredServers.find(s => s.ip === ip);
+
+            if (existing) {
+                alert(`Machine with IP ${ip} is already in the list.`);
+                return;
+            }
+
+            const newServer = {
+                id: `server-${configuredServers.length + 1}`,
+                name: `EC2 Server (${ip})`,
+                ip: ip,
+                metrics_url: `http://${ip}:8081`,
+                agent_url: `http://${ip}:8081`
+            };
+
+            configuredServers.unshift(newServer);
+            saveMachinesToStorage();
+            renderMachineDropdown();
+            applyServer(newServer);
+        }
+
+        function toggleAdvancedSettings() {
+            const bar = document.getElementById('advanced-settings-bar');
+            bar.style.display = bar.style.display === 'grid' ? 'none' : 'grid';
+        }
+
+        async function syncWithBackendServers() {
+            let agentBase = document.getElementById('agent-url').value.trim().replace(/\/+$/, "");
+            if (!/^https?:\/\//i.test(agentBase)) agentBase = 'http://' + agentBase;
+
+            try {
+                const res = await fetch(`${agentBase}/api/servers`, { signal: AbortSignal.timeout(2500) });
+                if (res.ok) {
+                    const fetched = await res.json();
+                    if (Array.isArray(fetched) && fetched.length > 0) {
+                        fetched.forEach(srv => {
+                            if (srv.ip && !configuredServers.some(s => s.ip === srv.ip)) {
+                                configuredServers.push(srv);
+                            }
+                        });
+                        saveMachinesToStorage();
+                        renderMachineDropdown();
+                    }
+                }
+            } catch(e){}
+        }
+
         // ──────────────────────────────────────────────────────────────────────────
-        // View Switching & Presets
+        // View Switching
         // ──────────────────────────────────────────────────────────────────────────
         function switchView(viewName) {
             activeView = viewName;
@@ -1107,12 +1220,16 @@
         }
 
         // ──────────────────────────────────────────────────────────────────────────
-        // METRICS WEBSOCKET CONNECTION & AUTO FAILOVER
+        // METRICS WEBSOCKET & REST FALLBACK CONNECTION
         // ──────────────────────────────────────────────────────────────────────────
-        function initMetricsConnection(isLocalAttempt = false) {
+        function initMetricsConnection() {
             if (metricsWs) {
                 try { metricsWs.close(); } catch(e){}
                 metricsWs = null;
+            }
+            if (metricsPollTimer) {
+                clearInterval(metricsPollTimer);
+                metricsPollTimer = null;
             }
 
             const metricsUrlInput = document.getElementById('metrics-url');
@@ -1126,13 +1243,17 @@
             statusBadge.textContent = "Metrics: Connecting...";
             streamLabel.textContent = `Connecting to ${wsBase}/ws/metrics...`;
 
+            // 1. Initial REST poll so graphs immediately populate
+            fetchMetricsREST(httpBase);
+
+            // 2. Open live WebSocket stream
             try {
                 metricsWs = new WebSocket(`${wsBase}/ws/metrics`);
 
                 metricsWs.onopen = () => {
                     statusBadge.className = "status-badge status-online";
-                    statusBadge.textContent = "Metrics: Online";
-                    streamLabel.textContent = `✓ Streaming from ${httpBase}`;
+                    statusBadge.textContent = "Metrics: Online (WS)";
+                    streamLabel.textContent = `✓ Streaming live from ${httpBase}`;
                     const placeholder = document.getElementById('metrics-placeholder');
                     if (placeholder) placeholder.style.display = 'none';
                 };
@@ -1149,18 +1270,42 @@
                 };
 
                 metricsWs.onerror = () => {
-                    statusBadge.className = "status-badge status-offline";
-                    statusBadge.textContent = "Metrics: Offline";
-                    streamLabel.textContent = `Could not reach ${wsBase}/ws/metrics`;
+                    // Fallback to polling REST endpoint every 2s if WebSocket is unavailable
+                    statusBadge.className = "status-badge status-online";
+                    statusBadge.textContent = "Metrics: Online (HTTP)";
+                    streamLabel.textContent = `Live polling from ${httpBase}/api/metrics`;
+                    startMetricsPolling(httpBase);
                 };
 
                 metricsWs.onclose = () => {
-                    statusBadge.className = "status-badge status-offline";
-                    statusBadge.textContent = "Metrics: Closed";
+                    if (!metricsPollTimer) {
+                        startMetricsPolling(httpBase);
+                    }
                 };
             } catch(e) {
-                console.warn("Failed to create metrics WebSocket:", e);
+                startMetricsPolling(httpBase);
             }
+        }
+
+        async function fetchMetricsREST(httpBase) {
+            try {
+                const res = await fetch(`${httpBase}/api/metrics`, { signal: AbortSignal.timeout(2000) });
+                if (res.ok) {
+                    const data = await res.json();
+                    if (Array.isArray(data)) {
+                        renderMachineCards(data);
+                        document.getElementById('metrics-status').className = "status-badge status-online";
+                        document.getElementById('metrics-status').textContent = "Metrics: Online";
+                    }
+                }
+            } catch(e){}
+        }
+
+        function startMetricsPolling(httpBase) {
+            if (metricsPollTimer) return;
+            metricsPollTimer = setInterval(() => {
+                fetchMetricsREST(httpBase);
+            }, 2000);
         }
 
         // ──────────────────────────────────────────────────────────────────────────
@@ -1302,7 +1447,6 @@
                     netEl.textContent = `${rxMb} MB / ${txMb} MB`;
                 }
 
-                // Push new data points to chart
                 if (m.online && machineCharts[mid]) {
                     const chart = machineCharts[mid];
                     chart.data.datasets[0].data.shift();
@@ -1978,7 +2122,7 @@
 
         // Initial setup on load
         window.addEventListener('DOMContentLoaded', () => {
-            loadConfiguredServers();
+            loadMachines();
         });
     </script>
 </body>
