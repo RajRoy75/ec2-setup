@@ -635,6 +635,62 @@
             font-weight: 600;
         }
 
+        /* Log Archive Divider & Top Banner */
+        .log-top-banner {
+            text-align: center;
+            padding: 0.6rem;
+            margin-bottom: 0.6rem;
+            font-size: 0.78rem;
+            border-radius: 6px;
+            background: rgba(30, 41, 59, 0.6);
+            border: 1px dashed rgba(255, 255, 255, 0.1);
+            color: #94a3b8;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            user-select: none;
+            transition: all 0.2s ease;
+        }
+        .log-top-banner.loading {
+            background: rgba(59, 130, 246, 0.12);
+            border-color: rgba(59, 130, 246, 0.4);
+            color: #60a5fa;
+            font-weight: 600;
+        }
+        .log-top-banner.boundary {
+            background: rgba(16, 185, 129, 0.08);
+            border-color: rgba(16, 185, 129, 0.3);
+            color: #34d399;
+            font-weight: 600;
+        }
+
+        .log-file-divider {
+            display: flex;
+            align-items: center;
+            margin: 0.85rem 0;
+            gap: 0.75rem;
+            color: #64748b;
+            font-size: 0.74rem;
+            font-weight: 600;
+            user-select: none;
+        }
+        .log-file-divider::before, .log-file-divider::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.12), transparent);
+        }
+        .log-file-divider span {
+            background: rgba(15, 23, 42, 0.95);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            color: #60a5fa;
+            padding: 0.22rem 0.75rem;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+            letter-spacing: 0.2px;
+        }
+
         /* Split View Layout */
         .split-grid {
             display: grid;
@@ -906,27 +962,18 @@
             </div>
         </div>
 
-        <!-- Available Parquet Files Card -->
-        <div class="card" id="parquet-files-card">
-            <div class="card-header">
-                <h3>📁 S3 Parquet File Archives</h3>
-                <span class="badge-count" id="parquet-files-count">0 Files</span>
-            </div>
-            <div id="parquet-files-container" class="files-table-container">
-                <div class="status-msg">Click "List S3 Parquet Files" to search your S3 bucket.</div>
-            </div>
-        </div>
-
-        <!-- Parquet Record Reader Card -->
-        <div class="card" id="parquet-reader-card" style="display: none;">
+        <!-- Parquet Continuous Log Stream Card -->
+        <div class="card" id="parquet-reader-card" style="display: block;">
             <div class="card-header">
                 <div style="display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap;">
-                    <h3>📄 File: <span id="parquet-active-filename" style="color: #60a5fa;">None</span></h3>
+                    <h3>📜 S3 Parquet Log Stream: <span id="parquet-active-container" style="color: #60a5fa;">(All Containers)</span></h3>
+                    <span class="badge-count" id="parquet-stream-files-badge">0 / 0 Files Loaded</span>
                     <span class="badge-count" id="parquet-rows-count">0 rows</span>
                 </div>
-                <div style="display: flex; gap: 0.5rem;">
+                <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                    <button class="btn-secondary" onclick="jumpParquetToBottom()" id="btn-parquet-jump-bottom">⬇ Jump to Latest</button>
+                    <button class="btn-secondary" onclick="toggleParquetFilesCard()" id="btn-toggle-files-card">📁 Show Raw Files</button>
                     <button class="btn-secondary" onclick="exportParquetJSON()">💾 Export JSON</button>
-                    <button class="btn-danger" onclick="closeParquetReader()">✕ Close Viewer</button>
                 </div>
             </div>
 
@@ -937,11 +984,31 @@
                     <input id="parquet-filter-input" type="text" placeholder="Filter rows by text or stream (stdout/stderr)..." oninput="filterParquetRows()">
                     <button class="btn-clear-search" onclick="clearParquetFilter()" title="Clear filter">✕</button>
                 </div>
+                <div style="font-size: 0.78rem; color: var(--text-muted); display: flex; align-items: center; gap: 0.4rem;">
+                    <span style="color: #60a5fa;">💡</span> Scroll UP to load older log archive files seamlessly
+                </div>
             </div>
 
             <!-- Structured Parquet Rows Container -->
-            <div id="parquet-logs-window" class="terminal-box" style="height: 60vh;">
-                <div class="status-msg">Select a file from above to decode and inspect records.</div>
+            <div style="position: relative;">
+                <div id="parquet-logs-window" class="terminal-box" style="height: 62vh; overflow-y: auto;">
+                    <div id="parquet-top-loader" class="log-top-banner">
+                        Select a container or click "List S3 Parquet Files" to load logs.
+                    </div>
+                    <div id="parquet-logs-content"></div>
+                </div>
+                <button class="scroll-to-bottom-btn" id="parquet-scroll-to-bottom" onclick="jumpParquetToBottom()">⬇ Jump to latest</button>
+            </div>
+        </div>
+
+        <!-- Available Parquet Files Card (Raw Partition Files) -->
+        <div class="card" id="parquet-files-card" style="display: none;">
+            <div class="card-header">
+                <h3>📁 S3 Parquet File Archives (Partition Files)</h3>
+                <span class="badge-count" id="parquet-files-count">0 Files</span>
+            </div>
+            <div id="parquet-files-container" class="files-table-container">
+                <div class="status-msg">Click "List S3 Parquet Files" to search your S3 bucket.</div>
             </div>
         </div>
     </main>
@@ -1017,12 +1084,6 @@
         let liveSearchMatchSpans = [];
         let liveSearchMatchIndex = -1;
         let liveSearchDebounce = null;
-
-        // S3 Parquet State
-        let currentParquetRecords = [];
-
-        // Initialize Date input to today
-        document.getElementById('parquet-date').value = new Date().toISOString().split('T')[0];
 
         // ──────────────────────────────────────────────────────────────────────────
         // MACHINE & IP MANAGEMENT (LOCAL STORAGE + .ENV SYNC)
@@ -1899,8 +1960,14 @@
         }
 
         // ──────────────────────────────────────────────────────────────────────────
-        // S3 PARQUET ARCHIVE QUERY & RECORD VIEWER
+        // S3 PARQUET ARCHIVE QUERY & CONTINUOUS STREAM LOG VIEWER
         // ──────────────────────────────────────────────────────────────────────────
+        let allParquetFiles = [];            // List of S3FileInfo [{ key, file_name, size_bytes, last_modified }, ...]
+        let loadedFileIndices = [];          // Array of integers e.g. [0, 1, 2] tracking loaded file indices
+        let loadedParquetFilesData = {};     // Map fileIndex -> array of record objects [{ timestamp, stream, message }, ...]
+        let currentParquetRecords = [];      // Combined array of all loaded records in chronological order
+        let isLoadingOlderParquet = false;   // Flag to prevent duplicate fetches on scroll
+
         async function fetchParquetFiles() {
             const { httpBase } = getAgentUrls();
             const containerName = document.getElementById('parquet-container-select').value;
@@ -1911,8 +1978,29 @@
             btn.disabled = true;
             btn.textContent = "Querying S3...";
 
+            const activeLabel = document.getElementById('parquet-active-container');
+            if (activeLabel) activeLabel.textContent = containerName ? `'${containerName}'` : '(All Containers)';
+
             const filesContainer = document.getElementById('parquet-files-container');
             filesContainer.innerHTML = "<div class='status-msg'>Listing matching Parquet archive files in S3...</div>";
+
+            const windowEl = document.getElementById('parquet-logs-window');
+            const logsContent = document.getElementById('parquet-logs-content');
+            const topLoader = document.getElementById('parquet-top-loader');
+
+            // Reset stream state
+            allParquetFiles = [];
+            loadedFileIndices = [];
+            loadedParquetFilesData = {};
+            currentParquetRecords = [];
+            isLoadingOlderParquet = false;
+
+            if (logsContent) logsContent.innerHTML = "";
+            if (topLoader) {
+                topLoader.className = "log-top-banner loading";
+                topLoader.textContent = "Listing & loading latest Parquet log files...";
+            }
+            updateStreamBadges();
 
             try {
                 let url = `${httpBase}/api/archive/files?`;
@@ -1924,6 +2012,7 @@
                 if (!res.ok) throw new Error(await res.text() || "Failed to list S3 files");
 
                 const files = await res.json() || [];
+                allParquetFiles = files; // files are sorted newest first by backend
                 document.getElementById('parquet-files-count').textContent = `${files.length} Files`;
 
                 if (files.length === 0) {
@@ -1936,79 +2025,270 @@
                             </div>
                         </div>
                     `;
+                    if (topLoader) {
+                        topLoader.className = "log-top-banner boundary";
+                        topLoader.textContent = "No log archives found matching current filters.";
+                    }
+                    if (logsContent) logsContent.innerHTML = "";
                     return;
                 }
 
-                let html = `
-                    <table class="files-table">
-                        <thead>
-                            <tr>
-                                <th>File Name</th>
-                                <th>S3 Key Path</th>
-                                <th>Size</th>
-                                <th>Last Modified</th>
-                                <th>Action</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                `;
+                // Render raw file list table
+                renderParquetFilesTable(files);
 
-                files.forEach(f => {
-                    const sizeFormatted = f.size_bytes >= 1024 * 1024 
-                        ? (f.size_bytes / (1024 * 1024)).toFixed(2) + " MB"
-                        : (f.size_bytes / 1024).toFixed(1) + " KB";
-                    const dateFormatted = f.last_modified ? new Date(f.last_modified).toLocaleString() : 'N/A';
+                // Automatically load the latest file (files[0]) into stream and scroll to bottom
+                await loadParquetFileIndex(0, 'bottom');
 
-                    html += `
-                        <tr>
-                            <td class="file-name">📄 ${escapeHtml(f.file_name)}</td>
-                            <td style="color: var(--text-muted); font-size: 0.78rem;">${escapeHtml(f.key)}</td>
-                            <td><span class="badge-count">${sizeFormatted}</span></td>
-                            <td style="color: var(--text-muted); font-size: 0.8rem;">${dateFormatted}</td>
-                            <td>
-                                <button class="btn-primary" style="padding: 0.35rem 0.75rem; font-size: 0.78rem;" onclick="viewParquetFile('${encodeURIComponent(f.key)}', '${escapeHtml(f.file_name)}')">
-                                    👁️ Read Parquet
-                                </button>
-                            </td>
-                        </tr>
-                    `;
-                });
-
-                html += `</tbody></table>`;
-                filesContainer.innerHTML = html;
             } catch(err) {
                 filesContainer.innerHTML = `<div class='status-msg' style='color: var(--danger);'>Error: ${err.message}</div>`;
+                if (topLoader) {
+                    topLoader.className = "log-top-banner";
+                    topLoader.style.color = "var(--danger)";
+                    topLoader.textContent = `Error: ${err.message}`;
+                }
             } finally {
                 btn.disabled = false;
                 btn.innerHTML = "<span>🔎 List S3 Parquet Files</span>";
             }
         }
 
-        async function viewParquetFile(encodedKey, fileName) {
-            const key = decodeURIComponent(encodedKey);
-            const { httpBase } = getAgentUrls();
+        function renderParquetFilesTable(files) {
+            const filesContainer = document.getElementById('parquet-files-container');
+            let html = `
+                <table class="files-table">
+                    <thead>
+                        <tr>
+                            <th>File Name</th>
+                            <th>S3 Key Path</th>
+                            <th>Size</th>
+                            <th>Last Modified</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            `;
 
-            const readerCard = document.getElementById('parquet-reader-card');
+            files.forEach((f, idx) => {
+                const sizeFormatted = f.size_bytes >= 1024 * 1024 
+                    ? (f.size_bytes / (1024 * 1024)).toFixed(2) + " MB"
+                    : (f.size_bytes / 1024).toFixed(1) + " KB";
+                const dateFormatted = f.last_modified ? new Date(f.last_modified).toLocaleString() : 'N/A';
+
+                html += `
+                    <tr id="file-row-${idx}">
+                        <td class="file-name">📄 ${escapeHtml(f.file_name)}</td>
+                        <td style="color: var(--text-muted); font-size: 0.78rem;">${escapeHtml(f.key)}</td>
+                        <td><span class="badge-count">${sizeFormatted}</span></td>
+                        <td style="color: var(--text-muted); font-size: 0.8rem;">${dateFormatted}</td>
+                        <td>
+                            <button class="btn-primary" style="padding: 0.35rem 0.75rem; font-size: 0.78rem;" onclick="loadAndScrollToParquetFile(${idx})">
+                                👁️ Load in Stream
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            });
+
+            html += `</tbody></table>`;
+            filesContainer.innerHTML = html;
+        }
+
+        async function loadParquetFileIndex(fileIndex, scrollBehavior = 'bottom') {
+            if (fileIndex < 0 || fileIndex >= allParquetFiles.length) return;
+            if (loadedFileIndices.includes(fileIndex)) return;
+            if (isLoadingOlderParquet) return;
+
+            isLoadingOlderParquet = true;
             const windowEl = document.getElementById('parquet-logs-window');
-            readerCard.style.display = "block";
-            document.getElementById('parquet-active-filename').textContent = fileName;
-            document.getElementById('split-parquet-file-badge').textContent = fileName;
-            document.getElementById('parquet-filter-input').value = "";
+            const logsContent = document.getElementById('parquet-logs-content');
+            const topLoader = document.getElementById('parquet-top-loader');
+            const fileInfo = allParquetFiles[fileIndex];
 
-            windowEl.innerHTML = "<div class='status-msg'>Downloading & decoding Parquet records from S3...</div>";
-            readerCard.scrollIntoView({ behavior: 'smooth' });
+            if (topLoader) {
+                topLoader.className = "log-top-banner loading";
+                topLoader.textContent = scrollBehavior === 'prepend'
+                    ? `⏳ Loading older logs from ${fileInfo.file_name}...`
+                    : `Downloading & decoding ${fileInfo.file_name}...`;
+            }
 
             try {
-                const res = await fetch(`${httpBase}/api/archive/read?key=${encodeURIComponent(key)}`);
+                const { httpBase } = getAgentUrls();
+                const res = await fetch(`${httpBase}/api/archive/read?key=${encodeURIComponent(fileInfo.key)}`);
                 if (!res.ok) throw new Error(await res.text() || "Failed to read Parquet records");
 
-                currentParquetRecords = await res.json() || [];
-                document.getElementById('parquet-rows-count').textContent = `${currentParquetRecords.length} rows`;
-                renderParquetRows(currentParquetRecords);
+                const records = await res.json() || [];
+
+                loadedFileIndices.push(fileIndex);
+                loadedFileIndices.sort((a, b) => a - b);
+                loadedParquetFilesData[fileIndex] = records;
+
+                rebuildCurrentParquetRecords();
+
+                const fileHtml = buildFileLogsHTML(fileInfo, records, fileIndex);
+
+                if (scrollBehavior === 'prepend') {
+                    // Save scroll height and position before prepending
+                    const oldScrollHeight = windowEl.scrollHeight;
+                    const oldScrollTop = windowEl.scrollTop;
+
+                    const sectionDiv = document.createElement('div');
+                    sectionDiv.innerHTML = fileHtml;
+                    logsContent.insertBefore(sectionDiv, logsContent.firstChild);
+
+                    // Recalculate scroll top so view doesn't jump
+                    const newScrollHeight = windowEl.scrollHeight;
+                    windowEl.scrollTop = newScrollHeight - oldScrollHeight + oldScrollTop;
+                } else {
+                    logsContent.innerHTML = fileHtml;
+                    windowEl.scrollTop = windowEl.scrollHeight;
+                }
+
+                updateStreamBadges();
                 syncSplitView();
+
             } catch(err) {
-                windowEl.innerHTML = `<div class='status-msg' style='color: var(--danger);'>Error: ${err.message}</div>`;
+                console.error("Error loading parquet file", fileIndex, err);
+                if (topLoader) {
+                    topLoader.className = "log-top-banner";
+                    topLoader.style.color = "var(--danger)";
+                    topLoader.textContent = `Error loading file ${fileInfo.file_name}: ${err.message}`;
+                }
+            } finally {
+                isLoadingOlderParquet = false;
+                updateTopLoaderStatus();
             }
+        }
+
+        function buildFileLogsHTML(fileInfo, records, fileIndex) {
+            const fileDateStr = fileInfo.last_modified ? new Date(fileInfo.last_modified).toLocaleString() : fileInfo.file_name;
+            let html = `<div class="file-log-section" id="file-section-${fileIndex}">`;
+            html += `
+                <div class="log-file-divider">
+                    <span>📦 ${escapeHtml(fileInfo.file_name)} &bull; ${fileDateStr} (${records ? records.length : 0} lines)</span>
+                </div>
+            `;
+
+            if (!records || records.length === 0) {
+                html += `<div class="status-msg" style="padding: 0.5rem;">(No log records in this file)</div>`;
+            } else {
+                records.forEach(r => {
+                    const tsRaw = r.timestamp !== undefined ? r.timestamp : r.Timestamp;
+                    const streamRaw = r.stream || r.Stream || 'stdout';
+                    const msgRaw = r.message !== undefined ? r.message : (r.Message !== undefined ? r.Message : '');
+
+                    const formattedTime = formatTimestamp(tsRaw);
+                    const streamClass = String(streamRaw).toLowerCase() === 'stderr' ? 'badge-stderr' : 'badge-stdout';
+
+                    html += `
+                        <div class="log-row">
+                            <span class="log-ts">${formattedTime}</span>
+                            <span class="badge-stream ${streamClass}">${escapeHtml(streamRaw)}</span>
+                            <span class="log-msg">${escapeHtml(msgRaw)}</span>
+                        </div>
+                    `;
+                });
+            }
+
+            html += `</div>`;
+            return html;
+        }
+
+        function rebuildCurrentParquetRecords() {
+            currentParquetRecords = [];
+            // Sort loaded indices descending so currentParquetRecords is in chronological order (oldest file first)
+            const sortedIndices = [...loadedFileIndices].sort((a, b) => b - a);
+            sortedIndices.forEach(idx => {
+                if (loadedParquetFilesData[idx]) {
+                    currentParquetRecords.push(...loadedParquetFilesData[idx]);
+                }
+            });
+        }
+
+        function updateStreamBadges() {
+            const fileBadge = document.getElementById('parquet-stream-files-badge');
+            const rowsBadge = document.getElementById('parquet-rows-count');
+            if (fileBadge) fileBadge.textContent = `${loadedFileIndices.length} / ${allParquetFiles.length} Files Loaded`;
+            if (rowsBadge) rowsBadge.textContent = `${currentParquetRecords.length} rows`;
+        }
+
+        function updateTopLoaderStatus() {
+            const topLoader = document.getElementById('parquet-top-loader');
+            if (!topLoader) return;
+
+            if (allParquetFiles.length === 0) {
+                topLoader.className = "log-top-banner boundary";
+                topLoader.textContent = "No log archives available.";
+                return;
+            }
+
+            const maxLoadedIndex = Math.max(...loadedFileIndices);
+            const totalFiles = allParquetFiles.length;
+
+            if (maxLoadedIndex + 1 < totalFiles) {
+                topLoader.className = "log-top-banner";
+                topLoader.innerHTML = `↑ Scroll up to load older logs (${totalFiles - (maxLoadedIndex + 1)} older files remaining)`;
+            } else {
+                topLoader.className = "log-top-banner boundary";
+                topLoader.innerHTML = `✨ Reached beginning of S3 Parquet log archives (${loadedFileIndices.length} files loaded)`;
+            }
+        }
+
+        function initParquetScrollListener() {
+            const windowEl = document.getElementById('parquet-logs-window');
+            const jumpBtn = document.getElementById('parquet-scroll-to-bottom');
+            if (!windowEl) return;
+
+            windowEl.addEventListener('scroll', () => {
+                // Show jump-to-bottom button when scrolled up
+                const distFromBottom = windowEl.scrollHeight - windowEl.scrollTop - windowEl.clientHeight;
+                if (jumpBtn) {
+                    jumpBtn.style.display = distFromBottom > 250 ? 'block' : 'none';
+                }
+
+                // Scroll-up trigger for loading older files
+                if (windowEl.scrollTop <= 80 && !isLoadingOlderParquet && loadedFileIndices.length > 0) {
+                    const nextOldestIndex = Math.max(...loadedFileIndices) + 1;
+                    if (nextOldestIndex < allParquetFiles.length) {
+                        loadParquetFileIndex(nextOldestIndex, 'prepend');
+                    }
+                }
+            });
+        }
+
+        function jumpParquetToBottom() {
+            const windowEl = document.getElementById('parquet-logs-window');
+            if (windowEl) windowEl.scrollTo({ top: windowEl.scrollHeight, behavior: 'smooth' });
+        }
+
+        function toggleParquetFilesCard() {
+            const card = document.getElementById('parquet-files-card');
+            const btn = document.getElementById('btn-toggle-files-card');
+            if (!card || !btn) return;
+            if (card.style.display === 'none') {
+                card.style.display = 'block';
+                btn.textContent = "📁 Hide Raw Files";
+                card.scrollIntoView({ behavior: 'smooth' });
+            } else {
+                card.style.display = 'none';
+                btn.textContent = "📁 Show Raw Files";
+            }
+        }
+
+        async function loadAndScrollToParquetFile(fileIndex) {
+            if (fileIndex < 0 || fileIndex >= allParquetFiles.length) return;
+
+            // Load all files up to fileIndex
+            for (let i = 0; i <= fileIndex; i++) {
+                if (!loadedFileIndices.includes(i)) {
+                    await loadParquetFileIndex(i, i === 0 ? 'bottom' : 'prepend');
+                }
+            }
+
+            const targetEl = document.getElementById(`file-section-${fileIndex}`);
+            if (targetEl) {
+                targetEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+            document.getElementById('parquet-reader-card').scrollIntoView({ behavior: 'smooth' });
         }
 
         function formatTimestamp(ts) {
@@ -2030,9 +2310,11 @@
         }
 
         function renderParquetRows(records) {
-            const windowEl = document.getElementById('parquet-logs-window');
+            const logsContent = document.getElementById('parquet-logs-content');
+            if (!logsContent) return;
+
             if (!records || records.length === 0) {
-                windowEl.innerHTML = "<div class='status-msg'>No matching log lines in this file.</div>";
+                logsContent.innerHTML = "<div class='status-msg'>No matching log lines.</div>";
                 return;
             }
 
@@ -2054,13 +2336,25 @@
                 `;
             });
 
-            windowEl.innerHTML = html;
+            logsContent.innerHTML = html;
         }
 
         function filterParquetRows() {
             const q = document.getElementById('parquet-filter-input').value.toLowerCase().trim();
+            const logsContent = document.getElementById('parquet-logs-content');
+
             if (!q) {
-                renderParquetRows(currentParquetRecords);
+                // Re-render loaded files with dividers
+                if (logsContent) {
+                    let fullHtml = "";
+                    const sortedLoaded = [...loadedFileIndices].sort((a, b) => b - a); // Oldest to newest
+                    sortedLoaded.forEach(idx => {
+                        if (allParquetFiles[idx] && loadedParquetFilesData[idx]) {
+                            fullHtml += buildFileLogsHTML(allParquetFiles[idx], loadedParquetFilesData[idx], idx);
+                        }
+                    });
+                    logsContent.innerHTML = fullHtml;
+                }
                 return;
             }
 
@@ -2069,12 +2363,19 @@
                 const stream = String(r.stream || r.Stream || '').toLowerCase();
                 return msg.includes(q) || stream.includes(q);
             });
-            renderParquetRows(filtered);
+
+            if (logsContent) {
+                if (filtered.length === 0) {
+                    logsContent.innerHTML = "<div class='status-msg'>No matching log lines found.</div>";
+                } else {
+                    renderParquetRows(filtered);
+                }
+            }
         }
 
         function clearParquetFilter() {
             document.getElementById('parquet-filter-input').value = "";
-            renderParquetRows(currentParquetRecords);
+            filterParquetRows();
         }
 
         function exportParquetJSON() {
@@ -2090,6 +2391,16 @@
 
         function closeParquetReader() {
             document.getElementById('parquet-reader-card').style.display = 'none';
+        }
+
+        function viewParquetFile(encodedKey, fileName) {
+            const key = decodeURIComponent(encodedKey);
+            const idx = allParquetFiles.findIndex(f => f.key === key);
+            if (idx !== -1) {
+                loadAndScrollToParquetFile(idx);
+            } else {
+                fetchParquetFiles();
+            }
         }
 
         // ──────────────────────────────────────────────────────────────────────────
@@ -2142,7 +2453,12 @@
 
         // Initial setup on load
         window.addEventListener('DOMContentLoaded', () => {
+            const dateInput = document.getElementById('parquet-date');
+            if (dateInput && !dateInput.value) {
+                dateInput.value = new Date().toISOString().split('T')[0];
+            }
             loadMachines();
+            initParquetScrollListener();
         });
     </script>
 </body>
